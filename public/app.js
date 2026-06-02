@@ -22,11 +22,148 @@ let isEliminated = false;
 let myElimReason = null;
 let pendingDropId = null;  // player the host is about to drop
 
+// ── Audio & haptics ─────────────────────────────────────────────────────────
+const LS_SOUND = 'wr_sound';
+let audioCtx     = null;
+let soundEnabled = localStorage.getItem(LS_SOUND) !== 'off';
+let lastTickAt   = 0;       // perf timestamp of last tick/heartbeat
+
+// Lazily create / resume the AudioContext (must follow a user gesture)
+function ensureAudio() {
+  if (!audioCtx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    try { audioCtx = new AC(); } catch (_) { return null; }
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+// Unlock audio on the very first interaction (browser autoplay policy)
+function unlockAudio() {
+  ensureAudio();
+  window.removeEventListener('pointerdown', unlockAudio);
+  window.removeEventListener('keydown', unlockAudio);
+}
+
+function vibrate(pattern) {
+  if (soundEnabled && navigator.vibrate) {
+    try { navigator.vibrate(pattern); } catch (_) {}
+  }
+}
+
+// A single enveloped oscillator note
+function tone(freq, { type = 'sine', dur = 0.08, vol = 0.2, attack = 0.005, glideTo = null, when = 0 } = {}) {
+  if (!soundEnabled || !audioCtx) return;
+  const t0   = audioCtx.currentTime + when;
+  const osc  = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t0);
+  if (glideTo) osc.frequency.exponentialRampToValueAtTime(glideTo, t0 + dur);
+  gain.gain.setValueAtTime(0.0001, t0);
+  gain.gain.linearRampToValueAtTime(vol, t0 + attack);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  osc.connect(gain).connect(audioCtx.destination);
+  osc.start(t0);
+  osc.stop(t0 + dur + 0.03);
+}
+
+const sfxTick = (urgent, vol) =>
+  tone(urgent ? 1320 : 880, { type: 'square', dur: 0.035, vol: vol * (urgent ? 1 : 0.85), attack: 0.001 });
+
+function sfxHeartbeat(vol) {
+  tone(70, { type: 'sine', dur: 0.16, vol });
+  tone(55, { type: 'sine', dur: 0.18, vol: vol * 0.9, when: 0.14 });
+}
+
+function sfxYourTurn() {
+  tone(660, { type: 'triangle', dur: 0.12, vol: 0.25 });
+  tone(990, { type: 'triangle', dur: 0.16, vol: 0.25, when: 0.1 });
+}
+
+function sfxEliminated(strong) {
+  tone(320, { type: 'sawtooth', dur: 0.5, vol: strong ? 0.4 : 0.22, glideTo: 70 });
+  if (strong) tone(150, { type: 'square', dur: 0.5, vol: 0.2, glideTo: 50 });
+}
+
+function sfxWin(big) {
+  const notes = [523.25, 659.25, 783.99, 1046.5]; // C5 E5 G5 C6
+  notes.forEach((f, i) => tone(f, { type: 'triangle', dur: 0.3, vol: big ? 0.35 : 0.22, when: i * 0.12 }));
+  if (big) tone(1318.5, { type: 'triangle', dur: 0.5, vol: 0.3, when: notes.length * 0.12 });
+}
+
+function flashDanger() {
+  const v = document.getElementById('danger-vignette');
+  if (!v) return;
+  v.classList.add('flash');
+  setTimeout(() => v.classList.remove('flash'), 600);
+}
+
+function clearTension() {
+  const v = document.getElementById('danger-vignette');
+  if (v) v.classList.remove('active', 'mine');
+  document.querySelectorAll('.timer-container').forEach(el => el.classList.remove('shake'));
+  lastTickAt = 0;
+}
+
+// Map x in [x0,x1] to [y0,y1], clamped
+function mapClamp(x, x0, x1, y0, y1) {
+  const t = Math.max(0, Math.min(1, (x - x0) / (x1 - x0)));
+  return y0 + (y1 - y0) * t;
+}
+
+function tickIntervalMs(rem) {
+  // rem in (3,6] → 900ms..380ms ; rem in [0,3] → 520ms..230ms
+  return rem > 3 ? mapClamp(rem, 6, 3, 900, 380)
+                 : mapClamp(rem, 3, 0, 520, 230);
+}
+
+// Drive ticking, heartbeat, vibration and the red vignette from the live timer
+function updateTension(game, rem) {
+  const playing  = roomState && roomState.status === 'playing';
+  const liveTurn = playing && game && !game.pendingWord && !game.pausedReason && game.currentTurnPlayerId;
+
+  if (!liveTurn) { clearTension(); return; }
+
+  const isMyTurn  = myRole === 'player' && !isEliminated && game.currentTurnPlayerId === myPlayerId;
+  const intensity = isMyTurn ? 1 : 0.45; // spectators & host hear it softer
+  const now       = performance.now();
+
+  // Audio: ticking in the final 6s, heartbeat in the final 3s
+  if (rem <= 6) {
+    if (now - lastTickAt >= tickIntervalMs(rem)) {
+      lastTickAt = now;
+      if (rem <= 3) {
+        sfxHeartbeat(0.5 * intensity);
+        if (isMyTurn) vibrate(55);
+      } else {
+        sfxTick(rem <= 4.5, 0.12 * intensity);
+      }
+    }
+  } else {
+    lastTickAt = 0;
+  }
+
+  // Visuals: red vignette + timer shake in the final 3s
+  const danger = rem <= 3;
+  const v = document.getElementById('danger-vignette');
+  if (v) {
+    v.classList.toggle('active', danger);
+    v.classList.toggle('mine', danger && isMyTurn);
+  }
+  document.querySelectorAll('.timer-container')
+    .forEach(el => el.classList.toggle('shake', danger && isMyTurn));
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   socket = io();
   setupSocketListeners();
   setupUIListeners();
+  setupSoundToggle();
+  window.addEventListener('pointerdown', unlockAudio);
+  window.addEventListener('keydown', unlockAudio);
   startTimerLoop();
   tryReconnect();
 });
@@ -138,7 +275,11 @@ const ALL_SCREENS = [
 
 function showScreen(name) {
   ALL_SCREENS.forEach(s => {
-    document.getElementById('screen-' + s).classList.toggle('hidden', s !== name);
+    const el = document.getElementById('screen-' + s);
+    el.classList.toggle('hidden', s !== name);
+    // Clear the inline display:none (added to each screen to avoid a pre-CSS
+    // load flash); from here on the .hidden / .screen classes govern visibility.
+    el.style.display = '';
   });
 }
 
@@ -346,7 +487,12 @@ function hidePausedOverlay() {
 
 // ── Elimination event ─────────────────────────────────────────────────────────
 function handlePlayerEliminated(data) {
-  if (data.playerId === myPlayerId) {
+  const isMe = data.playerId === myPlayerId;
+  sfxEliminated(isMe);
+  clearTension();
+  if (isMe) {
+    vibrate([200, 80, 200]);
+    flashDanger();
     isEliminated  = true;
     myElimReason  = data.reason;
     showScreen('eliminated');
@@ -356,6 +502,10 @@ function handlePlayerEliminated(data) {
 
 // ── Game ended event ──────────────────────────────────────────────────────────
 function handleGameEnded(data) {
+  const iWon = data.winnerId && data.winnerId === myPlayerId;
+  sfxWin(iWon || myRole === 'host');
+  if (iWon) vibrate([100, 50, 100, 50, 220]);
+  clearTension();
   // roomState with status='ended' will follow; just ensure we reset input state
   const input = document.getElementById('player-word-input');
   if (input) { input.value = ''; input.disabled = true; }
@@ -365,6 +515,8 @@ function handleGameEnded(data) {
 function handleYourTurn(data) {
   // roomState update follows; focus input if it's my turn
   if (data.playerId === myPlayerId) {
+    sfxYourTurn();
+    vibrate([40, 40, 40]);
     setTimeout(() => {
       const input = document.getElementById('player-word-input');
       if (input && !input.disabled) input.focus();
@@ -415,6 +567,8 @@ function updateTimers() {
     }
     if (num) num.textContent = game ? display : '—';
   }
+
+  updateTension(game, rem);
 }
 
 // ── UI event listeners ────────────────────────────────────────────────────────
@@ -485,6 +639,24 @@ function setupUIListeners() {
 
   // New game (winner screen — host only)
   document.getElementById('btn-winner-new-game').addEventListener('click', startNewGame);
+}
+
+// ── Sound / haptics toggle ────────────────────────────────────────────────────
+function setupSoundToggle() {
+  const btn = document.getElementById('btn-sound-toggle');
+  if (!btn) return;
+  const render = () => {
+    btn.textContent = soundEnabled ? '🔊' : '🔇';
+    btn.classList.toggle('muted', !soundEnabled);
+  };
+  render();
+  btn.addEventListener('click', () => {
+    soundEnabled = !soundEnabled;
+    localStorage.setItem(LS_SOUND, soundEnabled ? 'on' : 'off');
+    render();
+    if (soundEnabled) { ensureAudio(); sfxYourTurn(); }   // unlock + sample
+    else { if (navigator.vibrate) navigator.vibrate(0); clearTension(); }
+  });
 }
 
 function joinRoom() {
