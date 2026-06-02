@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>سباق الكلمات</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ════════════════════════════════════════════════════
+       LANDING
+  ════════════════════════════════════════════════════ -->
+  <div id="screen-landing" class="screen">
+    <div class="card center-card">
+      <div class="game-logo">⚡</div>
+      <h1 class="game-title">سباق الكلمات</h1>
+      <p class="game-subtitle">لعبة تسلسل الكلمات العربية — من الأسرع؟</p>
+
+      <button id="btn-create" class="btn btn-primary btn-lg">
+        إنشاء غرفة (هوست)
+      </button>
+
+      <div class="divider"><span>أو</span></div>
+
+      <div class="join-form">
+        <input id="input-room-code"    type="text" class="input input-code"
+               placeholder="رمز الغرفة (4 أحرف)" maxlength="4" autocomplete="off" spellcheck="false">
+        <input id="input-player-name" type="text" class="input"
+               placeholder="اسمك في اللعبة" maxlength="30" autocomplete="off">
+        <button id="btn-join" class="btn btn-secondary btn-lg">انضمام كلاعب</button>
+      </div>
+
+      <p id="landing-error" class="error-msg hidden"></p>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════
+       HOST LOBBY
+  ════════════════════════════════════════════════════ -->
+  <div id="screen-host-lobby" class="screen hidden">
+    <div class="card lobby-card">
+      <div class="role-badge">الحكم / الهوست</div>
+
+      <div class="room-code-block">
+        <span class="room-code-label">رمز الغرفة</span>
+        <span id="host-room-code" class="room-code">----</span>
+        <p class="room-code-hint">شارك هذا الرمز مع اللاعبين</p>
+      </div>
+
+      <div class="player-section">
+        <h3 class="section-title">
+          اللاعبون المنضمون
+          <span class="count-badge" id="host-lobby-count">0</span>
+        </h3>
+        <ul id="host-lobby-players" class="player-list"></ul>
+      </div>
+
+      <button id="btn-start-game" class="btn btn-primary btn-lg btn-start">
+        بدء اللعبة
+      </button>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════
+       PLAYER LOBBY
+  ════════════════════════════════════════════════════ -->
+  <div id="screen-player-lobby" class="screen hidden">
+    <div class="card lobby-card">
+      <div class="room-code-block">
+        <span class="room-code-label">غرفة</span>
+        <span id="player-lobby-code" class="room-code">----</span>
+      </div>
+
+      <p class="waiting-msg">
+        <span class="waiting-icon">⏳</span>
+        في انتظار الهوست ليبدأ اللعبة...
+      </p>
+
+      <div class="player-section">
+        <h3 class="section-title">
+          اللاعبون
+          <span class="count-badge" id="player-lobby-count">0</span>
+        </h3>
+        <ul id="player-lobby-players" class="player-list"></ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════
+       PLAYER GAME
+  ════════════════════════════════════════════════════ -->
+  <div id="screen-player-game" class="screen hidden">
+    <div class="game-layout">
+
+      <!-- Main column -->
+      <div class="game-main">
+        <div id="turn-status" class="turn-status turn-waiting">
+          في انتظار دورك
+        </div>
+
+        <div class="word-display card">
+          <div class="word-row">
+            <span class="wlabel">الكلمة الحالية:</span>
+            <span id="player-current-word" class="current-word">—</span>
+          </div>
+          <div class="word-row letter-row">
+            <span class="wlabel">الحرف المطلوب:</span>
+            <span id="player-required-letter" class="required-letter">—</span>
+          </div>
+        </div>
+
+        <div class="timer-wrap">
+          <div class="timer-container">
+            <svg class="timer-ring" viewBox="0 0 100 100">
+              <circle class="ring-bg" cx="50" cy="50" r="45"/>
+              <circle class="ring-fg" id="player-ring-fg" cx="50" cy="50" r="45"
+                stroke-dasharray="282.74" stroke-dashoffset="0"/>
+            </svg>
+            <span id="player-timer-number" class="timer-number">—</span>
+          </div>
+        </div>
+
+        <div class="submit-area card">
+          <div class="submit-row">
+            <input id="player-word-input" type="text" class="input input-word"
+                   placeholder="اكتب كلمتك هنا..." maxlength="50"
+                   autocomplete="off" spellcheck="false" disabled>
+            <button id="btn-submit-word" class="btn btn-primary" disabled>إرسال</button>
+          </div>
+          <p id="submit-error" class="error-msg hidden"></p>
+          <div id="pending-notice" class="pending-notice hidden">
+            ⏳ بانتظار قرار الحكم على كلمتك...
+          </div>
+        </div>
+      </div>
+
+      <!-- Sidebar -->
+      <div class="game-sidebar">
+        <div class="card sidebar-card">
+          <h3 class="section-title">ترتيب الدور</h3>
+          <ul id="player-game-players" class="player-list"></ul>
+        </div>
+        <div class="card sidebar-card">
+          <h3 class="section-title">
+            الكلمات المستخدمة
+            <span class="count-badge" id="player-words-count">0</span>
+          </h3>
+          <ul id="player-used-words" class="words-list"></ul>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════
+       HOST GAME
+  ════════════════════════════════════════════════════ -->
+  <div id="screen-host-game" class="screen hidden">
+    <div class="host-topbar">
+      <div class="role-badge role-badge-sm">الحكم</div>
+      <div class="topbar-code">غرفة: <strong id="host-game-code">----</strong></div>
+      <div id="host-tier-badge" class="tier-badge">—</div>
+    </div>
+
+    <div class="game-layout">
+
+      <!-- Main column -->
+      <div class="game-main">
+
+        <div class="word-display card">
+          <div class="word-row">
+            <span class="wlabel">الكلمة الحالية:</span>
+            <span id="host-current-word" class="current-word">—</span>
+          </div>
+          <div class="word-row letter-row">
+            <span class="wlabel">الحرف التالي:</span>
+            <span id="host-required-letter" class="required-letter">—</span>
+          </div>
+        </div>
+
+        <div class="timer-wrap">
+          <div class="timer-container">
+            <svg class="timer-ring" viewBox="0 0 100 100">
+              <circle class="ring-bg" cx="50" cy="50" r="45"/>
+              <circle class="ring-fg" id="host-ring-fg" cx="50" cy="50" r="45"
+                stroke-dasharray="282.74" stroke-dashoffset="0"/>
+            </svg>
+            <span id="host-timer-number" class="timer-number">—</span>
+          </div>
+        </div>
+
+        <!-- Approval panel — visible only when a word is pending -->
+        <div id="host-approval-panel" class="approval-panel card hidden">
+          <div class="approval-header">
+            كلمة مُرسَلة من
+            <span id="approval-player-name" class="player-name-chip"></span>
+          </div>
+          <div id="approval-word-text" class="approval-word"></div>
+          <div class="approval-btns">
+            <button id="btn-accept" class="btn btn-accept">✓ قبول — كلمة صحيحة</button>
+            <button id="btn-reject" class="btn btn-reject">✗ رفض — ليست كلمة</button>
+          </div>
+        </div>
+
+        <!-- Paused player controls — visible when a player disconnected -->
+        <div id="host-pause-controls" class="pause-panel card hidden">
+          <div class="pause-icon">📵</div>
+          <p id="host-pause-msg" class="pause-msg"></p>
+          <div class="pause-btns">
+            <button id="btn-wait-player" class="btn btn-secondary">
+              ⏳ انتظار عودته
+            </button>
+            <button id="btn-drop-player" class="btn btn-danger">
+              إكمال بدون اللاعب
+            </button>
+          </div>
+        </div>
+
+        <!-- New game button — visible after game ends -->
+        <div id="host-new-game-panel" class="hidden new-game-panel">
+          <button id="btn-new-game" class="btn btn-primary btn-lg">
+            🔄 بدء لعبة جديدة
+          </button>
+        </div>
+
+        <!-- Used words -->
+        <div class="card">
+          <h3 class="section-title">
+            الكلمات المستخدمة
+            <span class="count-badge" id="host-words-count">0</span>
+          </h3>
+          <ul id="host-used-words" class="words-list"></ul>
+        </div>
+      </div>
+
+      <!-- Sidebar -->
+      <div class="game-sidebar">
+        <div class="card sidebar-card">
+          <h3 class="section-title">اللاعبون</h3>
+          <ul id="host-game-players" class="player-list"></ul>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════
+       ELIMINATED (spectator)
+  ════════════════════════════════════════════════════ -->
+  <div id="screen-eliminated" class="screen hidden">
+    <div class="elim-header card">
+      <div class="elim-icon">💀</div>
+      <h2>خرجت من اللعبة</h2>
+      <p id="elim-reason" class="elim-reason"></p>
+    </div>
+
+    <div class="spectator-label">👁 تابع كمشاهد</div>
+
+    <div class="game-layout">
+      <div class="game-main">
+        <div class="word-display card">
+          <div class="word-row">
+            <span class="wlabel">الكلمة الحالية:</span>
+            <span id="elim-current-word" class="current-word">—</span>
+          </div>
+          <div class="word-row letter-row">
+            <span class="wlabel">الحرف التالي:</span>
+            <span id="elim-required-letter" class="required-letter">—</span>
+          </div>
+        </div>
+        <div class="card">
+          <h3 class="section-title">
+            الكلمات المستخدمة
+            <span class="count-badge" id="elim-words-count">0</span>
+          </h3>
+          <ul id="elim-used-words" class="words-list"></ul>
+        </div>
+      </div>
+      <div class="game-sidebar">
+        <div class="card sidebar-card">
+          <h3 class="section-title">اللاعبون المتبقون</h3>
+          <ul id="elim-players" class="player-list"></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════
+       WINNER
+  ════════════════════════════════════════════════════ -->
+  <div id="screen-winner" class="screen hidden">
+    <div class="winner-card card">
+      <div class="winner-trophy">🏆</div>
+      <div class="winner-label">الفائز</div>
+      <div id="winner-name" class="winner-name"></div>
+      <!-- Host-only new-game button — shown via JS -->
+      <button id="btn-winner-new-game" class="btn btn-primary btn-lg hidden">
+        🔄 بدء لعبة جديدة
+      </button>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════
+       PAUSED OVERLAY (shown over game screens for players)
+  ════════════════════════════════════════════════════ -->
+  <div id="overlay-paused" class="overlay hidden">
+    <div class="overlay-box card">
+      <div class="overlay-icon">⏸️</div>
+      <h3 id="overlay-title">اللعبة متوقفة مؤقتاً</h3>
+      <p id="overlay-msg"></p>
+    </div>
+  </div>
+
+</div><!-- #app -->
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
