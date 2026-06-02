@@ -39,9 +39,9 @@ function tryReconnect() {
 
   if (role === 'host') {
     const hToken = localStorage.getItem(LS_HTOKEN);
-    if (!hToken) return;
+    if (!hToken) { clearSession(); showScreen('landing'); return; }
     socket.emit('reconnectHost', { code, hostToken: hToken }, res => {
-      if (!res.success) { clearSession(); return; }
+      if (!res.success) { clearSession(); showScreen('landing'); return; }
       myRole = 'host';
       roomCode = code;
       handleRoomState(res.roomState);
@@ -51,9 +51,9 @@ function tryReconnect() {
     const pid  = localStorage.getItem(LS_PID);
     const tok  = localStorage.getItem(LS_PTOKEN);
     const name = localStorage.getItem(LS_NAME);
-    if (!pid || !tok) return;
+    if (!pid || !tok) { clearSession(); showScreen('landing'); return; }
     socket.emit('joinRoom', { code, name, playerId: pid, token: tok }, res => {
-      if (!res.success) { clearSession(); return; }
+      if (!res.success) { clearSession(); showScreen('landing'); return; }
       myRole       = 'player';
       myPlayerId   = res.playerId;
       myPlayerName = res.playerName || name;
