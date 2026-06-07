@@ -14,6 +14,7 @@ const SPEED_TIERS = [
 ];
 const MAX_PLAYERS = 20;
 const CODE_CHARS  = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // excludes 0/O/1/I
+const MAX_EVENTS  = 80;                                  // host activity feed cap
 // ─────────────────────────────────────────────────────────────────────────────
 
 const app    = express();
@@ -23,9 +24,6 @@ const io     = new Server(server);
 app.use(express.static(path.join(__dirname, 'public')));
 
 // In-memory room store
-// room shape: { code, hostToken, hostSocketId, players: Map<id,player>,
-//               gameState: null|gs, status: 'lobby'|'playing'|'paused'|'ended',
-//               joinCounter: number, lastWinner: null|{id,name} }
 const rooms = new Map();
 
 // ── Arabic letter rules (pure functions) ─────────────────────────────────────
@@ -42,7 +40,6 @@ function requiredNextLetter(word) {
 
 function effectiveFirstLetter(word) {
   let w = stripDiacritics(word).trim();
-  // Strip leading definite article "ال" before hamza unification
   if (w.length > 2 && w[0] === 'ا' && w[1] === 'ل') w = w.slice(2);
   return unifyHamza(w[0]);
 }
@@ -82,6 +79,17 @@ function tierLabel(aliveCount) {
   return '5 ثوان';
 }
 
+// ── Event log (host activity feed) ────────────────────────────────────────────
+// Stored on gameState so it resets per game and survives host reconnect via
+// roomState broadcast. Newest events at the end of the array.
+function pushEvent(room, event) {
+  if (!room.gameState) return;
+  if (!Array.isArray(room.gameState.events)) room.gameState.events = [];
+  room.gameState.events.push({ id: uid().slice(0, 8), ts: Date.now(), ...event });
+  const overflow = room.gameState.events.length - MAX_EVENTS;
+  if (overflow > 0) room.gameState.events.splice(0, overflow);
+}
+
 // ── Public view builders ──────────────────────────────────────────────────────
 
 function pubPlayer(p) {
@@ -117,6 +125,7 @@ function pubRoom(room) {
       pausedForPlayerId:   gs.pausedForPlayerId,
       pausedForPlayerName: gs.pausedForPlayerId ? room.players.get(gs.pausedForPlayerId)?.name : null,
       tierLabel:           gs.tierLabel,
+      events:              gs.events || [],
     } : null,
   };
 }
@@ -142,10 +151,21 @@ function startTimer(room) {
   gs.timerStoppedAt      = null;
   gs.frozenTimeRemaining = null;
   clearTimeout(gs.timerHandle);
-  gs.timerHandle = setTimeout(() => {
-    if (room.status !== 'playing' || gs.pendingWord) return;
-    doEliminate(room, gs.currentTurnPlayerId, 'انتهى الوقت');
-  }, gs.timerSeconds * 1000);
+  gs.timerHandle = setTimeout(() => timeoutCurrent(room), gs.timerSeconds * 1000);
+}
+
+// Shared timeout handler so the timeout event is logged whether the timer
+// fired from startTimer or resumeGame.
+function timeoutCurrent(room) {
+  const gs = room.gameState;
+  if (!gs || room.status !== 'playing' || gs.pendingWord) return;
+  const pid = gs.currentTurnPlayerId;
+  pushEvent(room, {
+    type: 'timeout',
+    playerId: pid,
+    playerName: room.players.get(pid)?.name,
+  });
+  doEliminate(room, pid, 'انتهى الوقت');
 }
 
 function doEliminate(room, playerId, reason) {
@@ -211,14 +231,10 @@ function resumeGame(room) {
   gs.timerStartedAt = Date.now();
   broadcast(room);
   io.to(room.code).emit('gameResumed', {});
-  // If a word is pending, host still needs to decide — don't restart timer
   if (gs.pendingWord) return;
   clearTimeout(gs.timerHandle);
   const delay = (remaining !== null ? remaining : gs.timerSeconds) * 1000;
-  gs.timerHandle = setTimeout(() => {
-    if (room.status !== 'playing' || gs.pendingWord) return;
-    doEliminate(room, gs.currentTurnPlayerId, 'انتهى الوقت');
-  }, delay);
+  gs.timerHandle = setTimeout(() => timeoutCurrent(room), delay);
   io.to(room.code).emit('yourTurn', { playerId: gs.currentTurnPlayerId });
 }
 
@@ -272,7 +288,7 @@ io.on('connection', socket => {
     const room = rooms.get(upperCode);
     if (!room) return cb?.({ success: false, reason: 'الغرفة غير موجودة' });
 
-    // Reconnection attempt
+    // Reconnection
     if (playerId && token) {
       const p = room.players.get(playerId);
       if (p && p.token === token) {
@@ -326,7 +342,6 @@ io.on('connection', socket => {
     if (!room || socket.data.role !== 'host') return;
     if (room.status !== 'lobby' && room.status !== 'ended') return;
 
-    // Reset all players (lets previously-dropped players rejoin)
     for (const p of room.players.values()) {
       p.alive = true; p.eliminated = false; p.eliminationReason = null;
     }
@@ -344,7 +359,13 @@ io.on('connection', socket => {
       pendingWord: null, pendingPlayerId: null,
       pausedReason: null, pausedForPlayerId: null,
       tierLabel: tierLabel(alive.length),
+      events: [],
     };
+    pushEvent(room, {
+      type: 'gameStarted',
+      count: alive.length,
+      firstPlayerName: first.name,
+    });
     startTimer(room);
     broadcast(room);
     io.to(room.code).emit('yourTurn', { playerId: first.id });
@@ -362,31 +383,41 @@ io.on('connection', socket => {
     const w = (word || '').trim();
     if (!w || /\s/.test(w)) return cb?.({ success: false });
 
-    // Stop server-side timer
     clearTimeout(gs.timerHandle);
     gs.timerHandle    = null;
     gs.timerStoppedAt = Date.now();
 
+    const playerName = room.players.get(playerId)?.name;
+
     // Letter check (skipped for the very first word)
     if (gs.requiredLetter !== null) {
       if (!startsCorrectly(w, gs.requiredLetter)) {
+        pushEvent(room, {
+          type: 'wrongLetter',
+          playerId, playerName, word: w,
+          expectedLetter: gs.requiredLetter,
+        });
         doEliminate(room, playerId, 'حرف خاطئ');
         return cb?.({ success: false, reason: 'حرف خاطئ' });
       }
     }
     // No-repeat check
     if (gs.usedWordKeys.has(repeatKey(w))) {
+      pushEvent(room, {
+        type: 'repeatedWord',
+        playerId, playerName, word: w,
+      });
       doEliminate(room, playerId, 'كلمة مكررة');
       return cb?.({ success: false, reason: 'كلمة مكررة' });
     }
 
-    // Passed auto-checks — send to host for approval
+    // Passed auto-checks — host approval
     gs.pendingWord     = w;
     gs.pendingPlayerId = playerId;
     broadcast(room);
     if (room.hostSocketId) {
       io.to(room.hostSocketId).emit('pendingApproval', {
-        word: w, playerId, playerName: room.players.get(playerId)?.name,
+        word: w, playerId, playerName,
       });
     }
     cb?.({ success: true, pending: true });
@@ -401,15 +432,25 @@ io.on('connection', socket => {
 
     const word = gs.pendingWord;
     const pid  = gs.pendingPlayerId;
+    const playerName = room.players.get(pid)?.name;
     gs.pendingWord = null; gs.pendingPlayerId = null; gs.timerStoppedAt = null;
 
     if (accept) {
+      const nextLetter = requiredNextLetter(word);
+      pushEvent(room, {
+        type: 'wordAccepted',
+        playerId: pid, playerName, word, nextLetter,
+      });
       gs.usedWords.push(word);
       gs.usedWordKeys.add(repeatKey(word));
-      gs.currentWord     = word;
-      gs.requiredLetter  = requiredNextLetter(word);
+      gs.currentWord    = word;
+      gs.requiredLetter = nextLetter;
       advanceTurn(room);
     } else {
+      pushEvent(room, {
+        type: 'wordRejected',
+        playerId: pid, playerName, word,
+      });
       doEliminate(room, pid, 'رفضها الحكم');
     }
     cb?.({ success: true });
@@ -424,7 +465,10 @@ io.on('connection', socket => {
     if (!player || !player.alive) return;
 
     const wasTurn = room.gameState.currentTurnPlayerId === playerId;
-    // Eliminate but keep in room (they rejoin next game)
+    pushEvent(room, {
+      type: 'dropped',
+      playerId, playerName: player.name,
+    });
     player.alive = false; player.eliminated = true; player.eliminationReason = 'انسحب';
     room.gameState.pendingWord = null; room.gameState.pendingPlayerId = null;
     io.to(room.code).emit('playerEliminated', {
@@ -439,7 +483,6 @@ io.on('connection', socket => {
       room.gameState.currentTurnPlayerId = next.id;
     }
 
-    // Resume without the dropped player
     room.status = 'playing';
     room.gameState.pausedReason    = null;
     room.gameState.pausedForPlayerId = null;
