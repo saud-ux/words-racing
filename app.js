@@ -20,8 +20,10 @@ let roomCode     = null;
 let roomState    = null;   // latest state from server
 let isEliminated = false;
 let myElimReason = null;
-let pendingDropId = null;  // player the host is about to drop
-let lastSeenEventId = null; // track newest rendered event for highlight animation
+let pendingDropId = null;  // player the host is about to drop (auto-pause flow)
+let pendingKickId = null;  // player the host is about to kick (manual)
+let lastSeenEventId = null;
+let lastPendingId   = null; // last pending word id we made a notification sound for
 
 // ── Audio & haptics ─────────────────────────────────────────────────────────
 const LS_SOUND = 'wr_sound';
@@ -89,6 +91,12 @@ function sfxWin(big) {
   const notes = [523.25, 659.25, 783.99, 1046.5];
   notes.forEach((f, i) => tone(f, { type: 'triangle', dur: 0.3, vol: big ? 0.35 : 0.22, when: i * 0.12 }));
   if (big) tone(1318.5, { type: 'triangle', dur: 0.5, vol: 0.3, when: notes.length * 0.12 });
+}
+
+// #13 — Two-tone bell for the host when a word arrives for approval
+function sfxPending() {
+  tone(880,  { type: 'sine', dur: 0.13, vol: 0.3 });
+  tone(1320, { type: 'sine', dur: 0.16, vol: 0.3, when: 0.13 });
 }
 
 function flashDanger() {
@@ -201,12 +209,13 @@ function clearSession() {
 
 // ── Socket listeners ──────────────────────────────────────────────────────────
 function setupSocketListeners() {
-  socket.on('roomState',       handleRoomState);
+  socket.on('roomState',        handleRoomState);
   socket.on('playerEliminated', handlePlayerEliminated);
   socket.on('gameEnded',        handleGameEnded);
   socket.on('gameResumed',      () => handleRoomState(roomState));
   socket.on('yourTurn',         handleYourTurn);
   socket.on('pendingApproval',  handlePendingApproval);
+  socket.on('kickedFromRoom',   handleKickedFromRoom);
 }
 
 // ── Central render dispatch ───────────────────────────────────────────────────
@@ -220,6 +229,18 @@ function handleRoomState(state) {
     if (me && me.alive) { isEliminated = false; myElimReason = null; }
   }
 
+  // #13 — play the pending bell for host when a new pending word appears
+  if (myRole === 'host' && game?.pendingWord) {
+    const pid = game.pendingPlayerId + ':' + game.pendingWord;
+    if (pid !== lastPendingId) {
+      lastPendingId = pid;
+      sfxPending();
+      vibrate([80, 60, 80]);
+    }
+  } else {
+    lastPendingId = null;
+  }
+
   if (myRole === 'host') {
     if (status === 'ended') {
       showScreen('winner');
@@ -227,7 +248,6 @@ function handleRoomState(state) {
     } else if (status === 'lobby') {
       showScreen('host-lobby');
       renderHostLobby(state);
-      // New game pending — reset the events highlight tracker
       lastSeenEventId = null;
     } else {
       showScreen('host-game');
@@ -279,7 +299,7 @@ function showScreen(name) {
 function renderHostLobby(state) {
   document.getElementById('host-room-code').textContent  = state.code;
   document.getElementById('host-lobby-count').textContent = state.players.length;
-  renderPlayerList('host-lobby-players', state.players, null, null);
+  renderPlayerList('host-lobby-players', state.players, null, null, { canKick: true });
   const startBtn = document.getElementById('btn-start-game');
   startBtn.textContent = state.lastWinner ? '🔄 بدء لعبة جديدة' : 'بدء اللعبة';
 }
@@ -344,6 +364,7 @@ function renderHostGame(state) {
   document.getElementById('host-current-word').textContent  = game.currentWord || '—';
   document.getElementById('host-required-letter').textContent = game.requiredLetter || '—';
 
+  // Approval panel
   const approvalPanel = document.getElementById('host-approval-panel');
   if (game.pendingWord) {
     approvalPanel.classList.remove('hidden');
@@ -353,6 +374,7 @@ function renderHostGame(state) {
     approvalPanel.classList.add('hidden');
   }
 
+  // Player-disconnect pause panel
   const pausePanel = document.getElementById('host-pause-controls');
   if (status === 'paused' && game.pausedReason === 'player' && game.pausedForPlayerId) {
     pausePanel.classList.remove('hidden');
@@ -364,9 +386,33 @@ function renderHostGame(state) {
     pendingDropId = null;
   }
 
+  // Manual-pause banner + button toggle (#4)
+  const manualPausedBanner = document.getElementById('host-manual-pause-banner');
+  const btnPause  = document.getElementById('btn-timer-pause');
+  const btnResume = document.getElementById('btn-timer-resume');
+  const btnMinus  = document.getElementById('btn-timer-minus');
+  const btnPlus   = document.getElementById('btn-timer-plus');
+  const btnEnd    = document.getElementById('btn-end-game');
+
+  const isManualPaused = status === 'paused' && game.pausedReason === 'manual';
+  const isAnyPaused    = status === 'paused';
+  const hasPending     = !!game.pendingWord;
+
+  manualPausedBanner.classList.toggle('hidden', !isManualPaused);
+  btnPause.classList.toggle('hidden',  isAnyPaused);
+  btnResume.classList.toggle('hidden', !isManualPaused);
+
+  // Disable timer-adjust + pause/resume + end-game when there's a pending word
+  // (decision is what unblocks them). End-game stays enabled even when paused.
+  btnMinus.disabled  = hasPending || isAnyPaused;
+  btnPlus.disabled   = hasPending || isAnyPaused;
+  btnPause.disabled  = hasPending || isAnyPaused;
+  btnResume.disabled = hasPending;
+  btnEnd.disabled    = hasPending;
+
   document.getElementById('host-new-game-panel').classList.add('hidden');
 
-  renderPlayerList('host-game-players', state.players, game.currentTurnPlayerId, null);
+  renderPlayerList('host-game-players', state.players, game.currentTurnPlayerId, null, { canKick: true });
   renderWordsList('host-used-words', 'host-words-count', game.usedWords, game.requiredLetter);
   renderEvents(game.events);
 }
@@ -403,13 +449,11 @@ function renderEvents(events) {
     return;
   }
 
-  // Newest event ID; mark the most recent as "new" if it changed since last render
   const newest = events[events.length - 1];
   const newId  = newest.id;
   const isNew  = newId !== lastSeenEventId;
 
   ul.innerHTML = '';
-  // Render newest-first
   events.slice().reverse().forEach((ev, i) => {
     const li = document.createElement('li');
     li.className = `event-item event-${ev.type}`;
@@ -420,7 +464,6 @@ function renderEvents(events) {
 
   if (isNew) {
     lastSeenEventId = newId;
-    // Auto-scroll the events list to the top so the new entry is visible
     ul.scrollTop = 0;
   }
 }
@@ -456,13 +499,17 @@ function formatEvent(ev) {
       return `<span class="ev-icon ev-bad">👋</span>`
            + `<span class="ev-text"><strong>${name}</strong></span>`
            + `<span class="ev-meta">انسحب</span>`;
+    case 'kicked':
+      return `<span class="ev-icon ev-bad">⛔</span>`
+           + `<span class="ev-text"><strong>${name}</strong></span>`
+           + `<span class="ev-meta">طُرد من الحكم</span>`;
     default:
       return `<span class="ev-text">${escHtml(ev.type)}</span>`;
   }
 }
 
 // ── Render: player list ───────────────────────────────────────────────────────
-function renderPlayerList(listId, players, currentTurnId, selfId) {
+function renderPlayerList(listId, players, currentTurnId, selfId, opts = {}) {
   const ul = document.getElementById(listId);
   if (!ul) return;
   ul.innerHTML = '';
@@ -483,13 +530,32 @@ function renderPlayerList(listId, players, currentTurnId, selfId) {
     if (!p.connected && !p.eliminated) tags.push({ text: 'منقطع', cls: 'tag-dc' });
     if (p.eliminated)           tags.push({ text: p.eliminationReason || 'خرج', cls: 'tag-elim' });
 
+    // #1 — Kick button (host views only)
+    const kickable = opts.canKick && !p.eliminated;
+    const kickBtn = kickable
+      ? `<button class="btn-kick" data-pid="${p.id}" title="طرد ${escHtml(p.name)}" aria-label="طرد">✕</button>`
+      : '';
+
     li.innerHTML = `
       <div class="player-avatar ${avatarClass}">${avatarChar}</div>
       <span class="player-name">${escHtml(p.name)}</span>
       ${tags.map(t => `<span class="player-tag ${t.cls}">${t.text}</span>`).join('')}
+      ${kickBtn}
     `;
     ul.appendChild(li);
   });
+
+  if (opts.canKick) {
+    ul.querySelectorAll('.btn-kick').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        const pid = btn.getAttribute('data-pid');
+        const player = players.find(x => x.id === pid);
+        if (!player) return;
+        openKickModal(player);
+      });
+    });
+  }
 }
 
 // ── Render: words list ────────────────────────────────────────────────────────
@@ -499,14 +565,18 @@ function renderWordsList(listId, countId, words, nextLetter) {
   if (!ul) return;
   if (ct) ct.textContent = (words || []).length;
   ul.innerHTML = '';
-  (words || []).slice().reverse().forEach((w, ri) => {
+  (words || []).slice().reverse().forEach((entry, ri) => {
     const idx  = (words.length - ri);
     const next = (ri === 0 && nextLetter) ? nextLetter : '';
+    // #10 — words can be strings (old shape) or {word, playerId, playerName}
+    const wordText   = typeof entry === 'string' ? entry : entry.word;
+    const playerName = typeof entry === 'string' ? ''    : entry.playerName;
     const li   = document.createElement('li');
     li.className = 'word-item';
     li.innerHTML = `
       <span class="word-index">${idx}</span>
-      <span class="word-text">${escHtml(w)}</span>
+      <span class="word-text">${escHtml(wordText)}</span>
+      ${playerName ? `<span class="word-author">${escHtml(playerName)}</span>` : ''}
       ${next ? `<span class="word-letter">→ ${next}</span>` : ''}
     `;
     ul.appendChild(li);
@@ -528,6 +598,9 @@ function showPausedOverlay(reason, playerName) {
   if (reason === 'host') {
     document.getElementById('overlay-title').textContent = 'اللعبة متوقفة';
     document.getElementById('overlay-msg').textContent   = 'في انتظار عودة الحكم...';
+  } else if (reason === 'manual') {
+    document.getElementById('overlay-title').textContent = 'استراحة قصيرة';
+    document.getElementById('overlay-msg').textContent   = 'الحكم أوقف المؤقت — انتظر لحظة';
   } else {
     document.getElementById('overlay-title').textContent = 'اللعبة متوقفة مؤقتاً';
     document.getElementById('overlay-msg').textContent   = `انقطع اتصال اللاعب: ${playerName || ''}`;
@@ -577,7 +650,25 @@ function handleYourTurn(data) {
 
 // ── Pending approval (host only) ──────────────────────────────────────────────
 function handlePendingApproval(data) {
+  // The pending-bell + state render is driven by roomState handling now.
   if (myRole === 'host' && roomState) handleRoomState(roomState);
+}
+
+// ── Kicked from room (kicked player only) ─────────────────────────────────────
+function handleKickedFromRoom(data) {
+  // Host pressed kick while we were in lobby/ended — bounce us back to landing
+  sfxEliminated(true);
+  vibrate([200, 80, 200]);
+  alert(data?.reason || 'طردك الحكم من الغرفة');
+  clearSession();
+  myRole = null;
+  myPlayerId = null;
+  myPlayerName = null;
+  roomCode = null;
+  roomState = null;
+  isEliminated = false;
+  myElimReason = null;
+  showScreen('landing');
 }
 
 // ── Timer loop ────────────────────────────────────────────────────────────────
@@ -664,9 +755,7 @@ function setupUIListeners() {
     socket.emit('judgeDecision', { accept: false });
   });
 
-  document.getElementById('btn-wait-player').addEventListener('click', () => {
-    // No-op: just dismisses the UI panel visually (game stays paused waiting)
-  });
+  document.getElementById('btn-wait-player').addEventListener('click', () => { /* no-op visual */ });
 
   document.getElementById('btn-drop-player').addEventListener('click', () => {
     if (!pendingDropId) return;
@@ -677,6 +766,88 @@ function setupUIListeners() {
 
   document.getElementById('btn-new-game').addEventListener('click', startNewGame);
   document.getElementById('btn-winner-new-game').addEventListener('click', startNewGame);
+
+  // #5 — ±5s on the current clock
+  document.getElementById('btn-timer-minus').addEventListener('click', () => {
+    socket.emit('hostAdjustTimer', { delta: -5 });
+  });
+  document.getElementById('btn-timer-plus').addEventListener('click', () => {
+    socket.emit('hostAdjustTimer', { delta: +5 });
+  });
+
+  // #4 — manual pause / resume
+  document.getElementById('btn-timer-pause').addEventListener('click', () => {
+    socket.emit('hostPauseTimer', res => {
+      if (res && !res.success && res.reason) alert(res.reason);
+    });
+  });
+  document.getElementById('btn-timer-resume').addEventListener('click', () => {
+    socket.emit('hostResumeTimer');
+  });
+
+  // #7 — end game
+  document.getElementById('btn-end-game').addEventListener('click', openEndGameModal);
+  document.getElementById('btn-end-no-winner').addEventListener('click', () => {
+    if (!confirm('إنهاء اللعبة بدون فائز؟')) return;
+    socket.emit('hostEndGame', { winnerId: null }, () => closeEndGameModal());
+  });
+  document.getElementById('btn-end-cancel').addEventListener('click', closeEndGameModal);
+
+  // #1 — kick confirmation modal buttons
+  document.getElementById('btn-kick-confirm').addEventListener('click', () => {
+    if (!pendingKickId) { closeKickModal(); return; }
+    socket.emit('hostKickPlayer', { playerId: pendingKickId }, res => {
+      if (res && !res.success) alert('تعذّر طرد اللاعب');
+    });
+    closeKickModal();
+  });
+  document.getElementById('btn-kick-cancel').addEventListener('click', closeKickModal);
+}
+
+// ── End-game modal (#7) ───────────────────────────────────────────────────────
+function openEndGameModal() {
+  if (!roomState) return;
+  const ul = document.getElementById('end-game-winner-list');
+  ul.innerHTML = '';
+  const alive = roomState.players.filter(p => p.alive);
+  if (alive.length === 0) {
+    ul.innerHTML = '<li class="events-empty">لا يوجد لاعبون أحياء</li>';
+  } else {
+    alive.forEach(p => {
+      const li = document.createElement('li');
+      li.className = 'player-item end-game-pick';
+      li.innerHTML = `
+        <div class="player-avatar alive">${escHtml(p.name.charAt(0))}</div>
+        <span class="player-name">${escHtml(p.name)}</span>
+        <span class="player-tag tag-turn">اختر فائزاً</span>
+      `;
+      li.addEventListener('click', () => {
+        if (!confirm(`إنهاء اللعبة وإعلان ${p.name} فائزاً؟`)) return;
+        socket.emit('hostEndGame', { winnerId: p.id }, () => closeEndGameModal());
+      });
+      ul.appendChild(li);
+    });
+  }
+  document.getElementById('end-game-modal').classList.remove('hidden');
+  document.getElementById('end-game-modal').style.display = '';
+}
+
+function closeEndGameModal() {
+  document.getElementById('end-game-modal').classList.add('hidden');
+}
+
+// ── Kick-confirmation modal (#1) ──────────────────────────────────────────────
+function openKickModal(player) {
+  pendingKickId = player.id;
+  document.getElementById('kick-modal-msg').textContent =
+    `هل تريد طرد "${player.name}" من الغرفة؟`;
+  document.getElementById('kick-modal').classList.remove('hidden');
+  document.getElementById('kick-modal').style.display = '';
+}
+
+function closeKickModal() {
+  pendingKickId = null;
+  document.getElementById('kick-modal').classList.add('hidden');
 }
 
 function setupSoundToggle() {

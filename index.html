@@ -200,6 +200,22 @@
           </div>
         </div>
 
+        <!-- ────── Host quick actions: timer controls + end game ────── -->
+        <div class="host-actions card">
+          <div class="action-group">
+            <span class="action-label">المؤقت:</span>
+            <button id="btn-timer-minus"  class="btn btn-secondary btn-sm" title="نقص 5 ثواني">−5ث</button>
+            <button id="btn-timer-pause"  class="btn btn-secondary btn-sm" title="إيقاف المؤقت">⏸</button>
+            <button id="btn-timer-resume" class="btn btn-primary   btn-sm hidden" title="تشغيل المؤقت">▶</button>
+            <button id="btn-timer-plus"   class="btn btn-secondary btn-sm" title="إضافة 5 ثواني">+5ث</button>
+          </div>
+          <div class="action-group">
+            <button id="btn-end-game" class="btn btn-danger btn-sm" title="إنهاء اللعبة الآن">
+              ⏹ إنهاء اللعبة
+            </button>
+          </div>
+        </div>
+
         <!-- Approval panel — visible only when a word is pending -->
         <div id="host-approval-panel" class="approval-panel card hidden">
           <div class="approval-header">
@@ -225,6 +241,12 @@
               إكمال بدون اللاعب
             </button>
           </div>
+        </div>
+
+        <!-- Manual-pause banner -->
+        <div id="host-manual-pause-banner" class="manual-pause-banner card hidden">
+          <span class="pause-icon">⏸️</span>
+          <span>المؤقت موقوف يدوياً — اضغط ▶ للاستئناف</span>
         </div>
 
         <!-- New game button — visible after game ends -->
@@ -330,6 +352,37 @@
       <div class="overlay-icon">⏸️</div>
       <h3 id="overlay-title">اللعبة متوقفة مؤقتاً</h3>
       <p id="overlay-msg"></p>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════
+       END-GAME MODAL (host-only)
+  ════════════════════════════════════════════════════ -->
+  <div id="end-game-modal" class="overlay hidden" style="display:none">
+    <div class="overlay-box card end-game-box">
+      <div class="overlay-icon">⏹</div>
+      <h3>إنهاء اللعبة</h3>
+      <p class="end-game-hint">اختر الفائز أو أنهِ بدون فائز:</p>
+      <ul id="end-game-winner-list" class="player-list end-game-winner-list"></ul>
+      <div class="end-game-actions">
+        <button id="btn-end-no-winner" class="btn btn-danger">إنهاء بدون فائز</button>
+        <button id="btn-end-cancel"   class="btn btn-secondary">رجوع</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════
+       KICK CONFIRMATION MODAL (host-only)
+  ════════════════════════════════════════════════════ -->
+  <div id="kick-modal" class="overlay hidden" style="display:none">
+    <div class="overlay-box card">
+      <div class="overlay-icon">⚠️</div>
+      <h3>طرد اللاعب؟</h3>
+      <p id="kick-modal-msg"></p>
+      <div class="end-game-actions">
+        <button id="btn-kick-confirm" class="btn btn-danger">نعم، اطرده</button>
+        <button id="btn-kick-cancel"  class="btn btn-secondary">رجوع</button>
+      </div>
     </div>
   </div>
 
