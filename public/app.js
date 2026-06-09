@@ -8,33 +8,30 @@ const LS_PTOKEN = 'wr_ptoken';
 const LS_HTOKEN = 'wr_htoken';
 const LS_NAME   = 'wr_name';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-const RING_C = 2 * Math.PI * 45; // SVG circle circumference ≈ 282.74
+const RING_C = 2 * Math.PI * 45;
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let socket;
-let myRole       = null;   // 'host' | 'player'
-let myPlayerId   = null;
-let myPlayerName = null;
-let roomCode     = null;
-let roomState    = null;   // latest state from server
-let isEliminated = false;
-let myElimReason = null;
-let pendingDropId = null;  // player the host is about to drop
+let myRole        = null;
+let myPlayerId    = null;
+let myPlayerName  = null;
+let roomCode      = null;
+let roomState     = null;
+let isEliminated  = false;
+let myElimReason  = null;
+let pendingDropId = null;
+let pendingKickId = null;
+let lastSeenEventId = null;
+let lastPendingId   = null;
+let prevCurrentWord = null;
+let lastTimerSecond = -1;
 
-// ── Animation state tracking ──────────────────────────────────────────────────
-let prevCurrentWord  = null;   // detect word acceptance
-let prevStatus       = null;   // detect game-start transition
-let prevPendingWord  = null;   // detect new pending word for host
-let lastTimerSecond  = -1;     // detect second boundary for tick animation
-
-// ── Audio & haptics ─────────────────────────────────────────────────────────
+// ── Audio ─────────────────────────────────────────────────────────────────────
 const LS_SOUND = 'wr_sound';
 let audioCtx     = null;
 let soundEnabled = localStorage.getItem(LS_SOUND) !== 'off';
-let lastTickAt   = 0;       // perf timestamp of last tick/heartbeat
+let lastTickAt   = 0;
 
-// Lazily create / resume the AudioContext (must follow a user gesture)
 function ensureAudio() {
   if (!audioCtx) {
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -45,7 +42,6 @@ function ensureAudio() {
   return audioCtx;
 }
 
-// Unlock audio on the very first interaction (browser autoplay policy)
 function unlockAudio() {
   ensureAudio();
   window.removeEventListener('pointerdown', unlockAudio);
@@ -58,81 +54,195 @@ function vibrate(pattern) {
   }
 }
 
-// A single enveloped oscillator note
-function tone(freq, { type = 'sine', dur = 0.08, vol = 0.2, attack = 0.005, glideTo = null, when = 0 } = {}) {
+// Core tone generator
+function tone(freq, {
+  type = 'sine', dur = 0.08, vol = 0.2,
+  attack = 0.005, decay = 0, sustain = 1,
+  release = 0.03, glideTo = null, when = 0,
+  filter = null, filterFreq = 2000, filterQ = 1,
+  distortion = false
+} = {}) {
   if (!soundEnabled || !audioCtx) return;
   const t0   = audioCtx.currentTime + when;
   const osc  = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
+
   osc.type = type;
   osc.frequency.setValueAtTime(freq, t0);
   if (glideTo) osc.frequency.exponentialRampToValueAtTime(glideTo, t0 + dur);
+
+  // ADSR envelope
+  const peakTime     = t0 + attack;
+  const decayEnd     = peakTime + decay;
+  const sustainLevel = vol * sustain;
+  const releaseStart = t0 + dur;
+
   gain.gain.setValueAtTime(0.0001, t0);
-  gain.gain.linearRampToValueAtTime(vol, t0 + attack);
-  gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-  osc.connect(gain).connect(audioCtx.destination);
+  gain.gain.linearRampToValueAtTime(vol, peakTime);
+  if (decay > 0) gain.gain.linearRampToValueAtTime(sustainLevel, decayEnd);
+  gain.gain.setValueAtTime(sustainLevel, releaseStart);
+  gain.gain.exponentialRampToValueAtTime(0.0001, releaseStart + release);
+
+  let node = gain;
+
+  // Optional filter
+  if (filter) {
+    const bq = audioCtx.createBiquadFilter();
+    bq.type = filter;
+    bq.frequency.value = filterFreq;
+    bq.Q.value = filterQ;
+    osc.connect(bq);
+    bq.connect(gain);
+  } else {
+    osc.connect(gain);
+  }
+
+  gain.connect(audioCtx.destination);
   osc.start(t0);
-  osc.stop(t0 + dur + 0.03);
+  osc.stop(t0 + dur + release + 0.05);
 }
 
-const sfxTick = (urgent, vol) =>
-  tone(urgent ? 1320 : 880, { type: 'square', dur: 0.035, vol: vol * (urgent ? 1 : 0.85), attack: 0.001 });
+// Noise burst (for impact effects)
+function noise(dur = 0.05, vol = 0.15, when = 0, filterFreq = 800) {
+  if (!soundEnabled || !audioCtx) return;
+  const t0          = audioCtx.currentTime + when;
+  const bufSize     = audioCtx.sampleRate * dur;
+  const buf         = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+  const data        = buf.getChannelData(0);
+  for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
 
-function sfxHeartbeat(vol) {
-  tone(70, { type: 'sine', dur: 0.16, vol });
-  tone(55, { type: 'sine', dur: 0.18, vol: vol * 0.9, when: 0.14 });
+  const src   = audioCtx.createBufferSource();
+  const bq    = audioCtx.createBiquadFilter();
+  const gain  = audioCtx.createGain();
+
+  src.buffer = buf;
+  bq.type = 'bandpass';
+  bq.frequency.value = filterFreq;
+  bq.Q.value = 0.8;
+
+  gain.gain.setValueAtTime(vol, t0);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+
+  src.connect(bq);
+  bq.connect(gain);
+  gain.connect(audioCtx.destination);
+  src.start(t0);
+  src.stop(t0 + dur + 0.01);
 }
 
-function sfxYourTurn() {
-  tone(660, { type: 'triangle', dur: 0.12, vol: 0.25 });
-  tone(990, { type: 'triangle', dur: 0.16, vol: 0.25, when: 0.1 });
-}
+// ═══════════════════════════════════════════════════════════
+// SOUND EFFECTS — complete game-show sound design
+// ═══════════════════════════════════════════════════════════
 
-function sfxEliminated(strong) {
-  tone(320, { type: 'sawtooth', dur: 0.5, vol: strong ? 0.4 : 0.22, glideTo: 70 });
-  if (strong) tone(150, { type: 'square', dur: 0.5, vol: 0.2, glideTo: 50 });
-}
-
-function sfxWin(big) {
-  const notes = [523.25, 659.25, 783.99, 1046.5]; // C5 E5 G5 C6
-  notes.forEach((f, i) => tone(f, { type: 'triangle', dur: 0.3, vol: big ? 0.35 : 0.22, when: i * 0.12 }));
-  if (big) tone(1318.5, { type: 'triangle', dur: 0.5, vol: 0.3, when: notes.length * 0.12 });
-}
-
-function sfxAccept() {
-  // Bright ascending arpeggio — satisfying confirmation
-  tone(523, { type: 'triangle', dur: 0.1,  vol: 0.26, when: 0    });
-  tone(659, { type: 'triangle', dur: 0.12, vol: 0.26, when: 0.07 });
-  tone(784, { type: 'triangle', dur: 0.22, vol: 0.30, when: 0.15 });
-}
-
-function sfxReject() {
-  // Short descending growl — unmistakably wrong
-  tone(280, { type: 'sawtooth', dur: 0.22, vol: 0.28, glideTo: 100 });
-}
-
+// 1. SUBMIT — satisfying "swoosh-click" when word is sent
 function sfxSubmit() {
-  // Subtle upward flick when a word is sent
-  tone(660, { type: 'sine', dur: 0.10, vol: 0.11, glideTo: 990 });
+  tone(800,  { type: 'sine',     dur: 0.06, vol: 0.18, attack: 0.002, glideTo: 1200, release: 0.04 });
+  noise(0.04, 0.1, 0.04, 1200);
 }
 
+// 2. ACCEPT — bright 3-note victory arpeggio
+function sfxAccept() {
+  tone(523,  { type: 'triangle', dur: 0.12, vol: 0.28, attack: 0.004, decay: 0.04, sustain: 0.7, release: 0.08, when: 0    });
+  tone(659,  { type: 'triangle', dur: 0.14, vol: 0.28, attack: 0.004, decay: 0.04, sustain: 0.7, release: 0.1,  when: 0.08 });
+  tone(784,  { type: 'triangle', dur: 0.22, vol: 0.32, attack: 0.004, decay: 0.06, sustain: 0.8, release: 0.14, when: 0.16 });
+  // Sparkle overtone
+  tone(1568, { type: 'sine',     dur: 0.18, vol: 0.09, attack: 0.01,  release: 0.12, when: 0.18 });
+}
+
+// 3. REJECT — heavy downward buzzer
+function sfxReject() {
+  tone(220, { type: 'sawtooth', dur: 0.28, vol: 0.35, attack: 0.003, decay: 0.05, sustain: 0.8, glideTo: 80,  release: 0.1 });
+  tone(180, { type: 'square',   dur: 0.22, vol: 0.18, attack: 0.003, glideTo: 60, release: 0.08, when: 0.02 });
+  noise(0.08, 0.18, 0, 300);
+}
+
+// 4. YOUR TURN — uplifting two-tone ping
+function sfxYourTurn() {
+  tone(880,  { type: 'triangle', dur: 0.15, vol: 0.3,  attack: 0.005, decay: 0.05, sustain: 0.6, release: 0.12 });
+  tone(1320, { type: 'triangle', dur: 0.22, vol: 0.28, attack: 0.005, decay: 0.06, sustain: 0.6, release: 0.16, when: 0.1 });
+}
+
+// 5. ELIMINATED (other player) — dark descending fall
+function sfxElimOther() {
+  tone(330, { type: 'sawtooth', dur: 0.45, vol: 0.22, attack: 0.004, glideTo: 80,  release: 0.12 });
+}
+
+// 6. ELIMINATED (me!) — dramatic game-over crash
+function sfxElimMe() {
+  tone(220, { type: 'sawtooth', dur: 0.6,  vol: 0.42, attack: 0.003, glideTo: 55,  release: 0.2 });
+  tone(160, { type: 'square',   dur: 0.5,  vol: 0.22, attack: 0.003, glideTo: 40,  release: 0.15, when: 0.05 });
+  noise(0.12, 0.3, 0, 200);
+  // Body thud
+  tone(60,  { type: 'sine',     dur: 0.3,  vol: 0.35, attack: 0.005, glideTo: 30,  release: 0.1,  when: 0.1 });
+}
+
+// 7. WIN (winner player / host if big) — full fanfare
+function sfxWin(big) {
+  const base = [523.25, 659.25, 783.99, 1046.5];
+  base.forEach((f, i) => {
+    tone(f, { type: 'triangle', dur: 0.35, vol: big ? 0.36 : 0.22,
+              attack: 0.006, decay: 0.08, sustain: 0.7, release: 0.18,
+              when: i * 0.11 });
+  });
+  if (big) {
+    tone(1318.5, { type: 'triangle', dur: 0.55, vol: 0.32,
+                   attack: 0.006, release: 0.22, when: base.length * 0.11 });
+    // Shimmer layer
+    [1047, 1319, 1568].forEach((f, i) =>
+      tone(f, { type: 'sine', dur: 0.4, vol: 0.1,
+                attack: 0.02, release: 0.2, when: base.length * 0.11 + i * 0.07 }));
+  }
+}
+
+// 8. GAME START — dramatic build-up fanfare
 function sfxGameStart() {
-  // Dramatic fanfare — builds excitement
-  tone(392,  { type: 'triangle', dur: 0.15, vol: 0.32, when: 0    });
-  tone(523,  { type: 'triangle', dur: 0.18, vol: 0.34, when: 0.15 });
-  tone(784,  { type: 'triangle', dur: 0.30, vol: 0.38, when: 0.32 });
-  tone(1047, { type: 'triangle', dur: 0.50, vol: 0.36, when: 0.55 });
+  // Low rumble build
+  tone(55,   { type: 'sine',     dur: 0.8,  vol: 0.18, attack: 0.1,  glideTo: 110, release: 0.2, when: 0 });
+  // Rising chord
+  tone(392,  { type: 'triangle', dur: 0.22, vol: 0.3,  attack: 0.01, decay: 0.06, sustain: 0.7, release: 0.14, when: 0.35 });
+  tone(523,  { type: 'triangle', dur: 0.26, vol: 0.32, attack: 0.01, decay: 0.06, sustain: 0.7, release: 0.16, when: 0.52 });
+  tone(784,  { type: 'triangle', dur: 0.40, vol: 0.36, attack: 0.01, decay: 0.08, sustain: 0.8, release: 0.2,  when: 0.70 });
+  tone(1047, { type: 'triangle', dur: 0.55, vol: 0.34, attack: 0.01, release: 0.24, when: 0.92 });
+  // Sparkle
+  tone(2093, { type: 'sine',     dur: 0.35, vol: 0.1,  attack: 0.02, release: 0.18, when: 1.0  });
 }
 
-function sfxCountdownBlip() {
-  // Single blip for 3-2-1 countdown
-  tone(440, { type: 'square', dur: 0.07, vol: 0.22 });
+// 9. COUNTDOWN BLIP — clean digital beep
+function sfxCountdownBlip(step) {
+  const freqs = [660, 770, 880];
+  const f = freqs[Math.min(step, freqs.length - 1)] || 660;
+  tone(f,       { type: 'square',   dur: 0.06, vol: 0.24, attack: 0.002, release: 0.04 });
+  tone(f * 1.5, { type: 'sine',     dur: 0.06, vol: 0.09, attack: 0.002, release: 0.04 });
 }
 
-function sfxNewPending() {
-  // Alert ping when a word arrives for the host to judge
-  tone(1100, { type: 'sine', dur: 0.18, vol: 0.18 });
-  tone(880,  { type: 'sine', dur: 0.14, vol: 0.12, when: 0.12 });
+// 10. PENDING BELL — attention-grabbing host alert
+function sfxPending() {
+  tone(1047, { type: 'sine',     dur: 0.18, vol: 0.28, attack: 0.004, decay: 0.06, sustain: 0.5, release: 0.18 });
+  tone(784,  { type: 'sine',     dur: 0.22, vol: 0.22, attack: 0.004, release: 0.16, when: 0.16 });
+  tone(1047, { type: 'triangle', dur: 0.14, vol: 0.18, attack: 0.004, release: 0.12, when: 0.38 });
+}
+
+// 11. TICK — builds urgency as time runs out
+function sfxTick(urgent, vol) {
+  if (urgent) {
+    tone(1320, { type: 'square', dur: 0.04, vol: vol * 1.2, attack: 0.001, release: 0.02 });
+    noise(0.025, vol * 0.3, 0, 2000);
+  } else {
+    tone(880,  { type: 'square', dur: 0.038, vol: vol * 0.85, attack: 0.001, release: 0.025 });
+  }
+}
+
+// 12. HEARTBEAT — deep pulse in final 3 seconds
+function sfxHeartbeat(vol) {
+  tone(65,  { type: 'sine', dur: 0.14, vol: vol * 1.1, attack: 0.008, glideTo: 55, release: 0.06 });
+  tone(50,  { type: 'sine', dur: 0.18, vol: vol * 0.9, attack: 0.008, glideTo: 40, release: 0.08, when: 0.14 });
+  noise(0.05, vol * 0.25, 0, 120);
+}
+
+// 13. KICK / DROP — sharp expulsion sound
+function sfxKick() {
+  tone(200, { type: 'sawtooth', dur: 0.2, vol: 0.3, attack: 0.003, glideTo: 50, release: 0.1 });
+  noise(0.06, 0.2, 0, 400);
 }
 
 function flashDanger() {
@@ -147,6 +257,7 @@ function clearTension() {
   if (v) v.classList.remove('active', 'mine');
   document.querySelectorAll('.timer-container').forEach(el => el.classList.remove('shake'));
   lastTickAt = 0;
+  updateTimerGlow(null);
 }
 
 // ── Animation helpers ─────────────────────────────────────────────────────────
@@ -156,6 +267,15 @@ function animatePop(el) {
   el.classList.remove('anim-pop');
   void el.offsetWidth;
   el.classList.add('anim-pop');
+  setTimeout(() => el.classList.remove('anim-pop'), 500);
+}
+
+function animateWordFlash(el) {
+  if (!el) return;
+  el.classList.remove('anim-word-flash');
+  void el.offsetWidth;
+  el.classList.add('anim-word-flash');
+  setTimeout(() => el.classList.remove('anim-word-flash'), 700);
 }
 
 function animateLetterFlash(el) {
@@ -163,6 +283,7 @@ function animateLetterFlash(el) {
   el.classList.remove('anim-letter-flash');
   void el.offsetWidth;
   el.classList.add('anim-letter-flash');
+  setTimeout(() => el.classList.remove('anim-letter-flash'), 700);
 }
 
 function animateTimerTick(el) {
@@ -170,9 +291,22 @@ function animateTimerTick(el) {
   el.classList.remove('anim-timer-tick');
   void el.offsetWidth;
   el.classList.add('anim-timer-tick');
+  setTimeout(() => el.classList.remove('anim-timer-tick'), 200);
 }
 
-// 3-2-1 countdown splash then انطلق
+// Update the inner glow color of the timer
+function updateTimerGlow(color) {
+  for (const id of ['player-timer-glow', 'host-timer-glow']) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    if (!color) {
+      el.style.background = '';
+    } else {
+      el.style.background = `radial-gradient(circle, ${color}18 0%, transparent 70%)`;
+    }
+  }
+}
+
 function showGameStartSplash() {
   sfxGameStart();
   const overlay = document.getElementById('splash-overlay');
@@ -183,42 +317,39 @@ function showGameStartSplash() {
   let i = 0;
   const tick = () => {
     if (i >= steps.length) { overlay.classList.add('hidden'); return; }
-    if (i < 3) sfxCountdownBlip();
+    if (i < 3) sfxCountdownBlip(i);
     textEl.textContent = steps[i];
     textEl.classList.remove('anim-splash');
     void textEl.offsetWidth;
     textEl.classList.add('anim-splash');
     i++;
-    setTimeout(tick, i < steps.length ? 380 : 720);
+    setTimeout(tick, i < steps.length ? 420 : 800);
   };
   tick();
 }
 
-// CSS confetti burst on win
 function spawnConfetti(count = 90) {
   const container = document.createElement('div');
   container.className = 'confetti-container';
   document.body.appendChild(container);
-  const colors = ['#f59e0b','#10b981','#3b82f6','#ef4444','#8b5cf6','#ec4899','#f97316'];
+  const colors = ['#c026d3','#f59e0b','#10b981','#6366f1','#ef4444','#ec4899','#f97316','#fff'];
   for (let i = 0; i < count; i++) {
     const p = document.createElement('div');
     p.className = 'confetti-particle';
-    const size = 5 + Math.random() * 9;
+    const size = 5 + Math.random() * 10;
     p.style.cssText = [
       `left:${Math.random() * 100}%`,
       `background:${colors[Math.floor(Math.random() * colors.length)]}`,
-      `width:${size}px`,
-      `height:${size}px`,
-      `animation-duration:${1.6 + Math.random() * 2.4}s`,
-      `animation-delay:${Math.random() * 0.8}s`,
-      `border-radius:${Math.random() > 0.5 ? '50%' : '2px'}`,
+      `width:${size}px`, `height:${size}px`,
+      `animation-duration:${1.5 + Math.random() * 2.5}s`,
+      `animation-delay:${Math.random() * 0.9}s`,
+      `border-radius:${Math.random() > 0.4 ? '50%' : '2px'}`,
     ].join(';');
     container.appendChild(p);
   }
   setTimeout(() => container.remove(), 5500);
 }
 
-// Full-screen red flash when YOU are eliminated
 function flashElimScreen() {
   const el = document.getElementById('elim-flash-overlay');
   if (!el) return;
@@ -227,19 +358,15 @@ function flashElimScreen() {
   el.classList.add('anim-elim-flash');
 }
 
-// Map x in [x0,x1] to [y0,y1], clamped
 function mapClamp(x, x0, x1, y0, y1) {
   const t = Math.max(0, Math.min(1, (x - x0) / (x1 - x0)));
   return y0 + (y1 - y0) * t;
 }
 
 function tickIntervalMs(rem) {
-  // rem in (3,6] → 900ms..380ms ; rem in [0,3] → 520ms..230ms
-  return rem > 3 ? mapClamp(rem, 6, 3, 900, 380)
-                 : mapClamp(rem, 3, 0, 520, 230);
+  return rem > 3 ? mapClamp(rem, 6, 3, 900, 360) : mapClamp(rem, 3, 0, 500, 210);
 }
 
-// Drive ticking, heartbeat, vibration and the red vignette from the live timer
 function updateTension(game, rem) {
   const playing  = roomState && roomState.status === 'playing';
   const liveTurn = playing && game && !game.pendingWord && !game.pausedReason && game.currentTurnPlayerId;
@@ -247,25 +374,23 @@ function updateTension(game, rem) {
   if (!liveTurn) { clearTension(); return; }
 
   const isMyTurn  = myRole === 'player' && !isEliminated && game.currentTurnPlayerId === myPlayerId;
-  const intensity = isMyTurn ? 1 : 0.45; // spectators & host hear it softer
+  const intensity = isMyTurn ? 1 : 0.42;
   const now       = performance.now();
 
-  // Audio: ticking in the final 6s, heartbeat in the final 3s
   if (rem <= 6) {
     if (now - lastTickAt >= tickIntervalMs(rem)) {
       lastTickAt = now;
       if (rem <= 3) {
-        sfxHeartbeat(0.5 * intensity);
+        sfxHeartbeat(0.48 * intensity);
         if (isMyTurn) vibrate(55);
       } else {
-        sfxTick(rem <= 4.5, 0.12 * intensity);
+        sfxTick(rem <= 4.5, 0.1 * intensity);
       }
     }
   } else {
     lastTickAt = 0;
   }
 
-  // Visuals: red vignette + timer shake in the final 3s
   const danger = rem <= 3;
   const v = document.getElementById('danger-vignette');
   if (v) {
@@ -276,19 +401,65 @@ function updateTension(game, rem) {
     .forEach(el => el.classList.toggle('shake', danger && isMyTurn));
 }
 
+// ── Arabic letter helpers ─────────────────────────────────────────────────────
+function stripDiacritics(s) { return s.replace(/[ً-ْٰـ]/g, ''); }
+function unifyHamza(ch) { return 'أإآٱ'.includes(ch) ? 'ا' : ch; }
+
+function requiredNextLetter(word) {
+  const w = stripDiacritics(word).trim();
+  let last = w[w.length - 1];
+  if (last === 'ة' || last === 'ى') last = w[w.length - 2];
+  return last ? unifyHamza(last) : '';
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   socket = io();
   setupSocketListeners();
   setupUIListeners();
   setupSoundToggle();
+  setupFirstWordInput();
   window.addEventListener('pointerdown', unlockAudio);
   window.addEventListener('keydown', unlockAudio);
   startTimerLoop();
   tryReconnect();
 });
 
-// ── Reconnect on page load ────────────────────────────────────────────────────
+// ── First-word input ──────────────────────────────────────────────────────────
+function setupFirstWordInput() {
+  const input    = document.getElementById('input-first-word');
+  const preview  = document.getElementById('first-word-letter-preview');
+  const valEl    = document.getElementById('fwl-value');
+  const startBtn = document.getElementById('btn-start-game');
+
+  input.addEventListener('input', () => {
+    const w = input.value.trim();
+    const errEl = document.getElementById('first-word-error');
+    errEl.classList.add('hidden');
+
+    if (!w) { preview.classList.add('hidden'); startBtn.disabled = true; return; }
+    if (/\s/.test(w)) {
+      preview.classList.add('hidden'); startBtn.disabled = true;
+      showError(errEl, 'كلمة واحدة فقط بدون مسافات'); return;
+    }
+
+    const letter = requiredNextLetter(w);
+    if (letter) {
+      valEl.textContent = letter;
+      preview.classList.remove('hidden');
+      startBtn.disabled = false;
+    } else {
+      preview.classList.add('hidden');
+      startBtn.disabled = true;
+    }
+  });
+
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !startBtn.disabled) startGame();
+  });
+}
+
+// ── Reconnect ─────────────────────────────────────────────────────────────────
 function tryReconnect() {
   const role = localStorage.getItem(LS_ROLE);
   const code = localStorage.getItem(LS_ROOM);
@@ -299,11 +470,9 @@ function tryReconnect() {
     if (!hToken) { clearSession(); showScreen('landing'); return; }
     socket.emit('reconnectHost', { code, hostToken: hToken }, res => {
       if (!res.success) { clearSession(); showScreen('landing'); return; }
-      myRole = 'host';
-      roomCode = code;
+      myRole = 'host'; roomCode = code;
       handleRoomState(res.roomState);
     });
-
   } else if (role === 'player') {
     const pid  = localStorage.getItem(LS_PID);
     const tok  = localStorage.getItem(LS_PTOKEN);
@@ -311,10 +480,8 @@ function tryReconnect() {
     if (!pid || !tok) { clearSession(); showScreen('landing'); return; }
     socket.emit('joinRoom', { code, name, playerId: pid, token: tok }, res => {
       if (!res.success) { clearSession(); showScreen('landing'); return; }
-      myRole       = 'player';
-      myPlayerId   = res.playerId;
-      myPlayerName = res.playerName || name;
-      roomCode     = code;
+      myRole = 'player'; myPlayerId = res.playerId;
+      myPlayerName = res.playerName || name; roomCode = code;
       const me = res.roomState?.players?.find(p => p.id === myPlayerId);
       if (me?.eliminated) { isEliminated = true; myElimReason = me.eliminationReason; }
       handleRoomState(res.roomState);
@@ -328,60 +495,60 @@ function clearSession() {
 
 // ── Socket listeners ──────────────────────────────────────────────────────────
 function setupSocketListeners() {
-  socket.on('roomState',       handleRoomState);
+  socket.on('roomState',        handleRoomState);
   socket.on('playerEliminated', handlePlayerEliminated);
   socket.on('gameEnded',        handleGameEnded);
-  socket.on('gameResumed',      () => handleRoomState(roomState)); // will get fresh roomState momentarily
+  socket.on('gameResumed',      () => handleRoomState(roomState));
   socket.on('yourTurn',         handleYourTurn);
   socket.on('pendingApproval',  handlePendingApproval);
-  socket.on('kickedFromRoom',   () => { clearSession(); showScreen('landing'); });
+  socket.on('kickedFromRoom',   handleKickedFromRoom);
 }
 
 // ── Central render dispatch ───────────────────────────────────────────────────
 function handleRoomState(state) {
   if (!state) return;
 
-  // ── Detect transitions for animations / sounds ─────────────────────────────
   const prev = roomState;
   if (prev) {
-    // Lobby → Playing: show countdown splash
+    // Lobby → Playing: countdown splash
     if (state.status === 'playing' && prev.status === 'lobby') {
       showGameStartSplash();
     }
 
-    // New word accepted (currentWord changed)
+    // Word accepted — play accept SFX + animate
     const prevWord = prev.game?.currentWord;
     const newWord  = state.game?.currentWord;
     if (newWord && newWord !== prevWord && prevCurrentWord !== undefined) {
       sfxAccept();
       requestAnimationFrame(() => {
-        animatePop(document.getElementById('player-current-word'));
-        animatePop(document.getElementById('host-current-word'));
+        animateWordFlash(document.getElementById('player-current-word'));
+        animateWordFlash(document.getElementById('host-current-word'));
+        animateWordFlash(document.getElementById('elim-current-word'));
         animateLetterFlash(document.getElementById('player-required-letter'));
         animateLetterFlash(document.getElementById('host-required-letter'));
+        animateLetterFlash(document.getElementById('elim-required-letter'));
       });
     }
     prevCurrentWord = newWord ?? null;
 
-    // New pending word arrived for host
+    // New pending word for host
     const prevPend = prev.game?.pendingWord;
     const newPend  = state.game?.pendingWord;
     if (newPend && newPend !== prevPend) {
-      sfxNewPending();
-      requestAnimationFrame(() => {
-        const panel = document.getElementById('host-approval-panel');
-        if (panel && !panel.classList.contains('hidden')) animatePop(panel);
-      });
+      if (myRole === 'host') {
+        sfxPending();
+        vibrate([80, 55, 80]);
+        requestAnimationFrame(() => {
+          const panel = document.getElementById('host-approval-panel');
+          if (panel && !panel.classList.contains('hidden')) animatePop(panel);
+        });
+      }
     }
-    prevPendingWord = newPend ?? null;
   }
 
-  prevStatus = state.status;
-
   roomState = state;
-  const { status, game } = state;
+  const { status } = state;
 
-  // If game restarted after winner screen, un-eliminate me (new round)
   if (status === 'playing' && isEliminated) {
     const me = state.players.find(p => p.id === myPlayerId);
     if (me && me.alive) { isEliminated = false; myElimReason = null; }
@@ -389,72 +556,61 @@ function handleRoomState(state) {
 
   if (myRole === 'host') {
     if (status === 'ended') {
-      showScreen('winner');
-      renderWinner(state, /* isHost */ true);
+      showScreen('winner'); renderWinner(state, true);
     } else if (status === 'lobby') {
-      showScreen('host-lobby');
-      renderHostLobby(state);
+      showScreen('host-lobby'); renderHostLobby(state); lastSeenEventId = null;
     } else {
-      showScreen('host-game');
-      renderHostGame(state);
+      showScreen('host-game'); renderHostGame(state);
     }
     return;
   }
 
   if (myRole === 'player') {
     if (status === 'ended') {
-      showScreen('winner');
-      renderWinner(state, /* isHost */ false);
-      hidePausedOverlay();
-      return;
+      showScreen('winner'); renderWinner(state, false); hidePausedOverlay(); return;
     }
     if (isEliminated) {
-      showScreen('eliminated');
-      renderEliminated(state);
-      updatePausedOverlay(state);
-      return;
+      showScreen('eliminated'); renderEliminated(state); updatePausedOverlay(state); return;
     }
     if (status === 'lobby') {
-      showScreen('player-lobby');
-      renderPlayerLobby(state);
-      hidePausedOverlay();
+      showScreen('player-lobby'); renderPlayerLobby(state); hidePausedOverlay();
     } else {
-      showScreen('player-game');
-      renderPlayerGame(state);
-      updatePausedOverlay(state);
+      showScreen('player-game'); renderPlayerGame(state); updatePausedOverlay(state);
     }
   }
 }
 
 // ── Screen switching ──────────────────────────────────────────────────────────
 const ALL_SCREENS = [
-  'landing', 'host-lobby', 'player-lobby',
-  'host-game', 'player-game', 'eliminated', 'winner',
+  'landing','host-lobby','player-lobby',
+  'host-game','player-game','eliminated','winner',
 ];
 
 function showScreen(name) {
   ALL_SCREENS.forEach(s => {
     const el = document.getElementById('screen-' + s);
     el.classList.toggle('hidden', s !== name);
-    // Clear the inline display:none (added to each screen to avoid a pre-CSS
-    // load flash); from here on the .hidden / .screen classes govern visibility.
     el.style.display = '';
   });
 }
 
 // ── Render: host lobby ────────────────────────────────────────────────────────
 function renderHostLobby(state) {
-  document.getElementById('host-room-code').textContent  = state.code;
+  document.getElementById('host-room-code').textContent   = state.code;
   document.getElementById('host-lobby-count').textContent = state.players.length;
-  renderPlayerList('host-lobby-players', state.players, null, null);
-  // Show new-game hint if returning from ended game
+  renderPlayerList('host-lobby-players', state.players, null, null, { canKick: true });
+
   const startBtn = document.getElementById('btn-start-game');
-  startBtn.textContent = state.lastWinner ? '🔄 بدء لعبة جديدة' : 'بدء اللعبة';
-  // Sync timer mode buttons
+  startBtn.textContent = (state.lastWinner ? '🔄 ' : '▶ ') + 'بدء اللعبة';
+  const w = document.getElementById('input-first-word')?.value.trim();
+  startBtn.disabled = !w || /\s/.test(w);
+
   const currentMode = state.timerMode ?? 'dynamic';
   document.querySelectorAll('#host-timer-opts .timer-opt').forEach(btn => {
-    const val = btn.dataset.secs === 'dynamic' ? 'dynamic' : parseInt(btn.dataset.secs, 10);
-    btn.classList.toggle('active', val === currentMode || (btn.dataset.secs === 'dynamic' && currentMode === 'dynamic'));
+    const raw = btn.dataset.secs;
+    const val = raw === 'dynamic' ? 'dynamic' : parseInt(raw, 10);
+    btn.classList.toggle('active',
+      raw === 'dynamic' ? currentMode === 'dynamic' : val === currentMode);
   });
 }
 
@@ -470,12 +626,11 @@ function renderPlayerGame(state) {
   const game = state.game;
   if (!game) return;
 
-  const isMeTurn   = game.currentTurnPlayerId === myPlayerId;
-  const isPending  = !!game.pendingWord;
-  const isPaused   = !!game.pausedReason;
-  const canSubmit  = isMeTurn && !isPending && !isPaused && state.status === 'playing';
+  const isMeTurn  = game.currentTurnPlayerId === myPlayerId;
+  const isPending = !!game.pendingWord;
+  const isPaused  = !!game.pausedReason;
+  const canSubmit = isMeTurn && !isPending && !isPaused && state.status === 'playing';
 
-  // Turn status banner
   const banner = document.getElementById('turn-status');
   if (isPending && isMeTurn) {
     banner.className = 'turn-status turn-pending';
@@ -485,27 +640,22 @@ function renderPlayerGame(state) {
     banner.textContent = '🎯 دورك الآن!';
   } else {
     banner.className = 'turn-status turn-waiting';
-    const turnPlayer = state.players.find(p => p.id === game.currentTurnPlayerId);
-    banner.textContent = `في انتظار: ${turnPlayer?.name || '...'}`;
+    const tp = state.players.find(p => p.id === game.currentTurnPlayerId);
+    banner.textContent = `⏳ في انتظار: ${tp?.name || '...'}`;
   }
 
-  // Current word & required letter
   document.getElementById('player-current-word').textContent   = game.currentWord || '—';
   document.getElementById('player-required-letter').textContent = game.requiredLetter || '—';
 
-  // Submit area
-  const input   = document.getElementById('player-word-input');
-  const btn     = document.getElementById('btn-submit-word');
+  const input = document.getElementById('player-word-input');
+  const btn   = document.getElementById('btn-submit-word');
   input.disabled = !canSubmit;
   btn.disabled   = !canSubmit;
   document.querySelector('.submit-area')?.classList.toggle('my-turn', canSubmit);
 
   document.getElementById('pending-notice').classList.toggle('hidden', !(isPending && isMeTurn));
 
-  // Players list
   renderPlayerList('player-game-players', state.players, game.currentTurnPlayerId, myPlayerId);
-
-  // Words list
   renderWordsList('player-used-words', 'player-words-count', game.usedWords, game.requiredLetter);
 }
 
@@ -517,16 +667,14 @@ function renderHostGame(state) {
   document.getElementById('host-game-code').textContent = state.code;
 
   if (!game) {
-    // Ended state while on host-game screen shouldn't happen, but guard anyway
     document.getElementById('host-new-game-panel').classList.remove('hidden');
     return;
   }
 
-  document.getElementById('host-tier-badge').textContent    = game.tierLabel || '—';
-  document.getElementById('host-current-word').textContent  = game.currentWord || '—';
+  document.getElementById('host-tier-badge').textContent     = game.tierLabel || '—';
+  document.getElementById('host-current-word').textContent    = game.currentWord || '—';
   document.getElementById('host-required-letter').textContent = game.requiredLetter || '—';
 
-  // Approval panel
   const approvalPanel = document.getElementById('host-approval-panel');
   if (game.pendingWord) {
     approvalPanel.classList.remove('hidden');
@@ -536,7 +684,6 @@ function renderHostGame(state) {
     approvalPanel.classList.add('hidden');
   }
 
-  // Pause controls (only when paused due to player disconnect)
   const pausePanel = document.getElementById('host-pause-controls');
   if (status === 'paused' && game.pausedReason === 'player' && game.pausedForPlayerId) {
     pausePanel.classList.remove('hidden');
@@ -548,19 +695,37 @@ function renderHostGame(state) {
     pendingDropId = null;
   }
 
-  // New game panel
+  const manualBanner = document.getElementById('host-manual-pause-banner');
+  const btnPause     = document.getElementById('btn-timer-pause');
+  const btnResume    = document.getElementById('btn-timer-resume');
+  const btnMinus     = document.getElementById('btn-timer-minus');
+  const btnPlus      = document.getElementById('btn-timer-plus');
+  const btnEnd       = document.getElementById('btn-end-game');
+  const isManual     = status === 'paused' && game.pausedReason === 'manual';
+  const isAnyPaused  = status === 'paused';
+  const hasPending   = !!game.pendingWord;
+
+  manualBanner.classList.toggle('hidden', !isManual);
+  btnPause.classList.toggle('hidden',  isAnyPaused);
+  btnResume.classList.toggle('hidden', !isManual);
+  btnMinus.disabled  = hasPending || isAnyPaused;
+  btnPlus.disabled   = hasPending || isAnyPaused;
+  btnPause.disabled  = hasPending || isAnyPaused;
+  btnResume.disabled = hasPending;
+  btnEnd.disabled    = hasPending;
+
   document.getElementById('host-new-game-panel').classList.add('hidden');
 
-  // Players & words
-  renderPlayerList('host-game-players', state.players, game.currentTurnPlayerId, null);
+  renderPlayerList('host-game-players', state.players, game.currentTurnPlayerId, null, { canKick: true });
   renderWordsList('host-used-words', 'host-words-count', game.usedWords, game.requiredLetter);
+  renderEvents(game.events);
 }
 
-// ── Render: eliminated spectator ──────────────────────────────────────────────
+// ── Render: eliminated ───────────────────────────────────────────────────────
 function renderEliminated(state) {
   const game = state.game;
-  document.getElementById('elim-reason').textContent        = myElimReason || '';
-  document.getElementById('elim-current-word').textContent  = game?.currentWord || '—';
+  document.getElementById('elim-reason').textContent         = myElimReason || '';
+  document.getElementById('elim-current-word').textContent   = game?.currentWord || '—';
   document.getElementById('elim-required-letter').textContent = game?.requiredLetter || '—';
   renderPlayerList('elim-players', state.players.filter(p => p.alive), game?.currentTurnPlayerId, null);
   renderWordsList('elim-used-words', 'elim-words-count', game?.usedWords || [], game?.requiredLetter);
@@ -570,16 +735,69 @@ function renderEliminated(state) {
 function renderWinner(state, isHost) {
   const w = state.lastWinner;
   document.getElementById('winner-name').textContent = w?.name || 'لا يوجد فائز';
-  const btn = document.getElementById('btn-winner-new-game');
-  btn.classList.toggle('hidden', !isHost);
+  document.getElementById('btn-winner-new-game').classList.toggle('hidden', !isHost);
+}
+
+// ── Render: events ────────────────────────────────────────────────────────────
+function renderEvents(events) {
+  const ul = document.getElementById('host-events-list');
+  const ct = document.getElementById('host-events-count');
+  if (!ul) return;
+  events = events || [];
+  if (ct) ct.textContent = events.length;
+
+  if (events.length === 0) {
+    ul.innerHTML = '<li class="events-empty">في انتظار الأحداث...</li>';
+    lastSeenEventId = null;
+    return;
+  }
+
+  const newest = events[events.length - 1];
+  const isNew  = newest.id !== lastSeenEventId;
+
+  ul.innerHTML = '';
+  events.slice().reverse().forEach((ev, i) => {
+    const li = document.createElement('li');
+    li.className = `event-item event-${ev.type}`;
+    if (i === 0 && isNew) li.classList.add('event-fresh');
+    li.innerHTML = formatEvent(ev);
+    ul.appendChild(li);
+  });
+
+  if (isNew) { lastSeenEventId = newest.id; ul.scrollTop = 0; }
+}
+
+function formatEvent(ev) {
+  const name = escHtml(ev.playerName || '');
+  const word = escHtml(ev.word || '');
+  switch (ev.type) {
+    case 'gameStarted':
+      return `<span class="ev-icon">🎮</span><span class="ev-text">بدأت — <strong>${ev.count}</strong> لاعبين — ${escHtml(ev.firstWord||'')}</span>`;
+    case 'wordAccepted':
+      return `<span class="ev-icon ev-ok">✓</span><span class="ev-text"><strong>${name}</strong>: ${word}</span><span class="ev-meta">→ ${escHtml(ev.nextLetter||'')}</span>`;
+    case 'wordRejected':
+      return `<span class="ev-icon ev-bad">✗</span><span class="ev-text"><strong>${name}</strong>: ${word}</span><span class="ev-meta">رُفضت</span>`;
+    case 'wrongLetter':
+      return `<span class="ev-icon ev-bad">⚠</span><span class="ev-text"><strong>${name}</strong>: ${word}</span><span class="ev-meta">حرف خاطئ</span>`;
+    case 'repeatedWord':
+      return `<span class="ev-icon ev-bad">↻</span><span class="ev-text"><strong>${name}</strong>: ${word}</span><span class="ev-meta">مكررة</span>`;
+    case 'timeout':
+      return `<span class="ev-icon ev-bad">⏱</span><span class="ev-text"><strong>${name}</strong></span><span class="ev-meta">انتهى الوقت</span>`;
+    case 'dropped':
+      return `<span class="ev-icon ev-bad">👋</span><span class="ev-text"><strong>${name}</strong></span><span class="ev-meta">انسحب</span>`;
+    case 'kicked':
+      return `<span class="ev-icon ev-bad">⛔</span><span class="ev-text"><strong>${name}</strong></span><span class="ev-meta">طُرد</span>`;
+    default:
+      return `<span class="ev-text">${escHtml(ev.type)}</span>`;
+  }
 }
 
 // ── Render: player list ───────────────────────────────────────────────────────
-function renderPlayerList(listId, players, currentTurnId, selfId) {
+function renderPlayerList(listId, players, currentTurnId, selfId, opts = {}) {
   const ul = document.getElementById(listId);
   if (!ul) return;
   ul.innerHTML = '';
-  players.forEach((p, i) => {
+  players.forEach(p => {
     const li = document.createElement('li');
     li.className = 'player-item';
     if (p.id === currentTurnId) li.classList.add('is-current-turn');
@@ -588,7 +806,6 @@ function renderPlayerList(listId, players, currentTurnId, selfId) {
     if (!p.connected && !p.eliminated) li.classList.add('is-disconnected');
 
     const avatarClass = p.eliminated ? 'dead' : (p.id === currentTurnId ? 'current' : 'alive');
-    const avatarChar  = p.name.charAt(0);
 
     const tags = [];
     if (p.id === selfId)        tags.push({ text: 'أنت',       cls: 'tag-me' });
@@ -596,13 +813,30 @@ function renderPlayerList(listId, players, currentTurnId, selfId) {
     if (!p.connected && !p.eliminated) tags.push({ text: 'منقطع', cls: 'tag-dc' });
     if (p.eliminated)           tags.push({ text: p.eliminationReason || 'خرج', cls: 'tag-elim' });
 
+    const kickable = opts.canKick && !p.eliminated;
+    const kickBtn  = kickable
+      ? `<button class="btn-kick" data-pid="${p.id}" aria-label="طرد">✕</button>`
+      : '';
+
     li.innerHTML = `
-      <div class="player-avatar ${avatarClass}">${avatarChar}</div>
+      <div class="player-avatar ${avatarClass}">${p.name.charAt(0)}</div>
       <span class="player-name">${escHtml(p.name)}</span>
       ${tags.map(t => `<span class="player-tag ${t.cls}">${t.text}</span>`).join('')}
+      ${kickBtn}
     `;
     ul.appendChild(li);
   });
+
+  if (opts.canKick) {
+    ul.querySelectorAll('.btn-kick').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        const pid = btn.getAttribute('data-pid');
+        const player = players.find(x => x.id === pid);
+        if (player) openKickModal(player);
+      });
+    });
+  }
 }
 
 // ── Render: words list ────────────────────────────────────────────────────────
@@ -613,23 +847,23 @@ function renderWordsList(listId, countId, words, nextLetter) {
   if (ct) ct.textContent = (words || []).length;
   ul.innerHTML = '';
   (words || []).slice().reverse().forEach((entry, ri) => {
-    const wordText   = typeof entry === 'object' ? entry.word       : entry;
-    const playerName = typeof entry === 'object' ? entry.playerName : null;
-    const idx  = (words.length - ri);
-    const next = (ri === 0 && nextLetter) ? nextLetter : '';
-    const li   = document.createElement('li');
+    const idx        = (words.length - ri);
+    const next       = ri === 0 && nextLetter ? nextLetter : '';
+    const wordText   = typeof entry === 'string' ? entry : entry.word;
+    const playerName = typeof entry === 'string' ? ''    : entry.playerName;
+    const li = document.createElement('li');
     li.className = 'word-item';
     li.innerHTML = `
       <span class="word-index">${idx}</span>
       <span class="word-text">${escHtml(wordText)}</span>
-      ${playerName ? `<span class="word-by">${escHtml(playerName)}</span>` : ''}
+      ${playerName ? `<span class="word-author">${escHtml(playerName)}</span>` : ''}
       ${next ? `<span class="word-letter">→ ${next}</span>` : ''}
     `;
     ul.appendChild(li);
   });
 }
 
-// ── Paused overlay (for players) ──────────────────────────────────────────────
+// ── Paused overlay ────────────────────────────────────────────────────────────
 function updatePausedOverlay(state) {
   const game = state.game;
   if (state.status === 'paused' && game?.pausedReason) {
@@ -644,6 +878,9 @@ function showPausedOverlay(reason, playerName) {
   if (reason === 'host') {
     document.getElementById('overlay-title').textContent = 'اللعبة متوقفة';
     document.getElementById('overlay-msg').textContent   = 'في انتظار عودة الحكم...';
+  } else if (reason === 'manual') {
+    document.getElementById('overlay-title').textContent = 'استراحة قصيرة';
+    document.getElementById('overlay-msg').textContent   = 'الحكم أوقف المؤقت — انتظر لحظة';
   } else {
     document.getElementById('overlay-title').textContent = 'اللعبة متوقفة مؤقتاً';
     document.getElementById('overlay-msg').textContent   = `انقطع اتصال اللاعب: ${playerName || ''}`;
@@ -654,67 +891,64 @@ function hidePausedOverlay() {
   document.getElementById('overlay-paused').classList.add('hidden');
 }
 
-// ── Elimination event ─────────────────────────────────────────────────────────
+// ── Socket events ─────────────────────────────────────────────────────────────
 function handlePlayerEliminated(data) {
   const isMe = data.playerId === myPlayerId;
-  if (data.reason === 'رفضها الحكم') sfxReject();
-  sfxEliminated(isMe);
+  if (isMe) { sfxElimMe(); vibrate([200, 80, 200, 80, 200]); flashDanger(); flashElimScreen(); }
+  else       { sfxElimOther(); }
   clearTension();
   if (isMe) {
-    vibrate([200, 80, 200]);
-    flashDanger();
-    flashElimScreen();
-    isEliminated  = true;
-    myElimReason  = data.reason;
+    isEliminated = true; myElimReason = data.reason;
     showScreen('eliminated');
     if (roomState) renderEliminated(roomState);
   }
 }
 
-// ── Game ended event ──────────────────────────────────────────────────────────
 function handleGameEnded(data) {
   const iWon = data.winnerId && data.winnerId === myPlayerId;
   sfxWin(iWon || myRole === 'host');
-  if (iWon) vibrate([100, 50, 100, 50, 220]);
+  if (iWon) vibrate([100, 50, 100, 50, 240]);
   clearTension();
-  if (iWon || myRole === 'host') spawnConfetti(iWon ? 110 : 70);
-  // roomState with status='ended' will follow; just ensure we reset input state
+  if (iWon || myRole === 'host') spawnConfetti(iWon ? 120 : 75);
   const input = document.getElementById('player-word-input');
   if (input) { input.value = ''; input.disabled = true; }
 }
 
-// ── Your turn ─────────────────────────────────────────────────────────────────
 function handleYourTurn(data) {
-  // roomState update follows; focus input if it's my turn
   if (data.playerId === myPlayerId) {
     sfxYourTurn();
-    vibrate([40, 40, 40]);
+    vibrate([40, 40, 45]);
     setTimeout(() => {
       const input = document.getElementById('player-word-input');
       if (input && !input.disabled) input.focus();
-    }, 100);
+    }, 120);
   }
 }
 
-// ── Pending approval (host only) ──────────────────────────────────────────────
-function handlePendingApproval(data) {
-  // roomState will reflect this; just ensure host is on game screen
+function handlePendingApproval() {
   if (myRole === 'host' && roomState) handleRoomState(roomState);
 }
 
-// ── Timer loop ────────────────────────────────────────────────────────────────
-function startTimerLoop() {
-  setInterval(updateTimers, 100);
+function handleKickedFromRoom(data) {
+  sfxKick();
+  vibrate([200, 80, 200]);
+  alert(data?.reason || 'طردك الحكم من الغرفة');
+  clearSession();
+  myRole = null; myPlayerId = null; myPlayerName = null;
+  roomCode = null; roomState = null;
+  isEliminated = false; myElimReason = null;
+  showScreen('landing');
 }
+
+// ── Timer loop ────────────────────────────────────────────────────────────────
+function startTimerLoop() { setInterval(updateTimers, 100); }
 
 function computeRemaining(game) {
   if (!game) return 0;
   if (game.pausedReason) return game.frozenTimeRemaining ?? game.timerSeconds;
   if (game.pendingWord) {
-    // Timer was stopped when word was submitted
-    if (game.timerStoppedAt && game.timerStartedAt) {
+    if (game.timerStoppedAt && game.timerStartedAt)
       return Math.max(0, game.timerSeconds - (game.timerStoppedAt - game.timerStartedAt) / 1000);
-    }
     return game.timerSeconds;
   }
   if (!game.timerStartedAt) return game.timerSeconds;
@@ -722,18 +956,19 @@ function computeRemaining(game) {
 }
 
 function updateTimers() {
-  const game  = roomState?.game;
-  const total = game?.timerSeconds || 10;
-  const rem   = computeRemaining(game);
-  const pct   = total > 0 ? rem / total : 0;
+  const game    = roomState?.game;
+  const total   = game?.timerSeconds || 10;
+  const rem     = computeRemaining(game);
+  const pct     = total > 0 ? rem / total : 0;
+  const display = Math.ceil(rem);
+
   const color = rem <= 2 ? '#ef4444'
               : rem <= 4 ? '#f97316'
               : rem <= 7 ? '#f59e0b'
               : '#10b981';
-  const offset  = RING_C * (1 - pct);
-  const display = Math.ceil(rem);
 
-  // Pulse the timer number on each new second
+  const offset = RING_C * (1 - pct);
+
   if (game && display !== lastTimerSecond && display >= 0) {
     lastTimerSecond = display;
     document.querySelectorAll('.timer-number').forEach(animateTimerTick);
@@ -748,35 +983,35 @@ function updateTimers() {
     }
     if (num) {
       num.textContent = game ? display : '—';
-      // Grow the number slightly as urgency increases
-      num.style.fontSize = rem <= 2 ? '2.6rem' : rem <= 4 ? '2.2rem' : '2rem';
-      num.style.color    = rem <= 4 ? color : '';
+      num.style.fontSize = rem <= 2 ? '2.8rem' : rem <= 4 ? '2.4rem' : '2.2rem';
+      num.style.color    = rem <= 5 ? color : '';
     }
   }
 
+  updateTimerGlow(rem <= 5 ? color : null);
   updateTension(game, rem);
 }
 
-// ── UI event listeners ────────────────────────────────────────────────────────
+// ── UI listeners ──────────────────────────────────────────────────────────────
 function setupUIListeners() {
 
-  // Create room (host)
   document.getElementById('btn-create').addEventListener('click', () => {
     socket.emit('createRoom', res => {
       if (!res.success) return;
-      myRole   = 'host';
-      roomCode = res.code;
+      myRole = 'host'; roomCode = res.code;
       localStorage.setItem(LS_ROLE,   'host');
       localStorage.setItem(LS_ROOM,   res.code);
       localStorage.setItem(LS_HTOKEN, res.hostToken);
       showScreen('host-lobby');
-      document.getElementById('host-room-code').textContent = res.code;
-      document.getElementById('host-lobby-count').textContent = '0';
-      document.getElementById('host-lobby-players').innerHTML = '';
+      document.getElementById('host-room-code').textContent      = res.code;
+      document.getElementById('host-lobby-count').textContent     = '0';
+      document.getElementById('host-lobby-players').innerHTML     = '';
+      document.getElementById('input-first-word').value          = '';
+      document.getElementById('first-word-letter-preview').classList.add('hidden');
+      document.getElementById('btn-start-game').disabled          = true;
     });
   });
 
-  // Join room (player)
   document.getElementById('btn-join').addEventListener('click', joinRoom);
   document.getElementById('input-room-code').addEventListener('keydown', e => {
     if (e.key === 'Enter') document.getElementById('input-player-name').focus();
@@ -785,20 +1020,13 @@ function setupUIListeners() {
     if (e.key === 'Enter') joinRoom();
   });
 
-  // Start game (host lobby)
-  document.getElementById('btn-start-game').addEventListener('click', () => {
-    socket.emit('startGame', res => {
-      if (res && !res.success) alert(res.reason || 'خطأ في بدء اللعبة');
-    });
-  });
+  document.getElementById('btn-start-game').addEventListener('click', startGame);
 
-  // Submit word (player game)
   document.getElementById('btn-submit-word').addEventListener('click', submitWord);
   document.getElementById('player-word-input').addEventListener('keydown', e => {
     if (e.key === 'Enter') submitWord();
   });
 
-  // Judge: accept / reject
   document.getElementById('btn-accept').addEventListener('click', () => {
     socket.emit('judgeDecision', { accept: true });
   });
@@ -806,13 +1034,8 @@ function setupUIListeners() {
     socket.emit('judgeDecision', { accept: false });
   });
 
-  // Host: wait for player
-  document.getElementById('btn-wait-player').addEventListener('click', () => {
-    // Default state — just close the panel UI, game stays paused
-    // (Nothing to emit; game is already paused waiting)
-  });
+  document.getElementById('btn-wait-player').addEventListener('click', () => {});
 
-  // Host: drop player
   document.getElementById('btn-drop-player').addEventListener('click', () => {
     if (!pendingDropId) return;
     socket.emit('hostDropPlayer', { playerId: pendingDropId }, res => {
@@ -820,13 +1043,35 @@ function setupUIListeners() {
     });
   });
 
-  // New game (host game screen)
-  document.getElementById('btn-new-game').addEventListener('click', startNewGame);
+  document.getElementById('btn-new-game').addEventListener('click',         () => showScreen('host-lobby'));
+  document.getElementById('btn-winner-new-game').addEventListener('click',  () => showScreen('host-lobby'));
 
-  // New game (winner screen — host only)
-  document.getElementById('btn-winner-new-game').addEventListener('click', startNewGame);
+  document.getElementById('btn-timer-minus').addEventListener('click', () => socket.emit('hostAdjustTimer', { delta: -5 }));
+  document.getElementById('btn-timer-plus').addEventListener('click',  () => socket.emit('hostAdjustTimer', { delta: +5 }));
 
-  // Timer mode selector (host lobby)
+  document.getElementById('btn-timer-pause').addEventListener('click', () => {
+    socket.emit('hostPauseTimer', res => {
+      if (res && !res.success && res.reason) alert(res.reason);
+    });
+  });
+  document.getElementById('btn-timer-resume').addEventListener('click', () => socket.emit('hostResumeTimer'));
+
+  document.getElementById('btn-end-game').addEventListener('click', openEndGameModal);
+  document.getElementById('btn-end-no-winner').addEventListener('click', () => {
+    if (!confirm('إنهاء اللعبة بدون فائز؟')) return;
+    socket.emit('hostEndGame', { winnerId: null }, () => closeEndGameModal());
+  });
+  document.getElementById('btn-end-cancel').addEventListener('click', closeEndGameModal);
+
+  document.getElementById('btn-kick-confirm').addEventListener('click', () => {
+    if (!pendingKickId) { closeKickModal(); return; }
+    socket.emit('hostKickPlayer', { playerId: pendingKickId }, res => {
+      if (res && !res.success) alert('تعذّر طرد اللاعب');
+    });
+    closeKickModal();
+  });
+  document.getElementById('btn-kick-cancel').addEventListener('click', closeKickModal);
+
   document.getElementById('host-timer-opts').addEventListener('click', e => {
     const btn = e.target.closest('.timer-opt');
     if (!btn) return;
@@ -835,29 +1080,86 @@ function setupUIListeners() {
     socket.emit('setTimerMode', { mode });
   });
 
-  // Leave lobby (player)
   document.getElementById('btn-leave-lobby').addEventListener('click', () => {
-    socket.emit('leaveRoom', {}, () => {
-      clearSession();
-      myRole = null; myPlayerId = null; myPlayerName = null; roomCode = null; roomState = null;
-      isEliminated = false; myElimReason = null;
-      showScreen('landing');
-    });
+    socket.emit('leaveRoom', {}, () => resetClientState());
   });
 
-  // Leave game (player during game)
   document.getElementById('btn-leave-game').addEventListener('click', () => {
     if (!confirm('هل أنت متأكد أنك تريد مغادرة اللعبة؟')) return;
-    socket.emit('leaveRoom', {}, () => {
-      clearSession();
-      myRole = null; myPlayerId = null; myPlayerName = null; roomCode = null; roomState = null;
-      isEliminated = false; myElimReason = null;
-      showScreen('landing');
-    });
+    socket.emit('leaveRoom', {}, () => resetClientState());
   });
 }
 
-// ── Sound / haptics toggle ────────────────────────────────────────────────────
+function resetClientState() {
+  clearSession();
+  myRole = null; myPlayerId = null; myPlayerName = null;
+  roomCode = null; roomState = null;
+  isEliminated = false; myElimReason = null;
+  showScreen('landing');
+}
+
+// ── Start game ────────────────────────────────────────────────────────────────
+function startGame() {
+  const input = document.getElementById('input-first-word');
+  const errEl = document.getElementById('first-word-error');
+  const word  = input.value.trim();
+
+  if (!word) { showError(errEl, 'اكتب الكلمة الأولى قبل البدء'); input.focus(); return; }
+  if (/\s/.test(word)) { showError(errEl, 'كلمة واحدة فقط بدون مسافات'); input.focus(); return; }
+
+  errEl.classList.add('hidden');
+  socket.emit('startGame', { firstWord: word }, res => {
+    if (res && !res.success) showError(errEl, res.reason || 'خطأ في بدء اللعبة');
+  });
+}
+
+// ── End-game modal ────────────────────────────────────────────────────────────
+function openEndGameModal() {
+  if (!roomState) return;
+  const ul = document.getElementById('end-game-winner-list');
+  ul.innerHTML = '';
+  const alive = roomState.players.filter(p => p.alive);
+  if (!alive.length) {
+    ul.innerHTML = '<li class="events-empty">لا يوجد لاعبون أحياء</li>';
+  } else {
+    alive.forEach(p => {
+      const li = document.createElement('li');
+      li.className = 'player-item end-game-pick';
+      li.innerHTML = `
+        <div class="player-avatar alive">${escHtml(p.name.charAt(0))}</div>
+        <span class="player-name">${escHtml(p.name)}</span>
+        <span class="player-tag tag-turn">اختر فائزاً</span>
+      `;
+      li.addEventListener('click', () => {
+        if (!confirm(`إنهاء اللعبة وإعلان ${p.name} فائزاً؟`)) return;
+        socket.emit('hostEndGame', { winnerId: p.id }, () => closeEndGameModal());
+      });
+      ul.appendChild(li);
+    });
+  }
+  document.getElementById('end-game-modal').classList.remove('hidden');
+  document.getElementById('end-game-modal').style.display = '';
+}
+
+function closeEndGameModal() {
+  document.getElementById('end-game-modal').classList.add('hidden');
+}
+
+// ── Kick modal ────────────────────────────────────────────────────────────────
+function openKickModal(player) {
+  pendingKickId = player.id;
+  document.getElementById('kick-modal-msg').textContent =
+    `هل تريد طرد "${player.name}" من الغرفة؟`;
+  document.getElementById('kick-modal').classList.remove('hidden');
+  document.getElementById('kick-modal').style.display = '';
+}
+
+function closeKickModal() {
+  pendingKickId = null;
+  document.getElementById('kick-modal').classList.add('hidden');
+}
+
+// ── Sound toggle ──────────────────────────────────────────────────────────────
 function setupSoundToggle() {
   const btn = document.getElementById('btn-sound-toggle');
   if (!btn) return;
@@ -870,27 +1172,26 @@ function setupSoundToggle() {
     soundEnabled = !soundEnabled;
     localStorage.setItem(LS_SOUND, soundEnabled ? 'on' : 'off');
     render();
-    if (soundEnabled) { ensureAudio(); sfxYourTurn(); }   // unlock + sample
+    if (soundEnabled) { ensureAudio(); sfxYourTurn(); }
     else { if (navigator.vibrate) navigator.vibrate(0); clearTension(); }
   });
 }
 
+// ── Join & submit ─────────────────────────────────────────────────────────────
 function joinRoom() {
-  const code = document.getElementById('input-room-code').value.trim().toUpperCase();
-  const name = document.getElementById('input-player-name').value.trim();
+  const code  = document.getElementById('input-room-code').value.trim().toUpperCase();
+  const name  = document.getElementById('input-player-name').value.trim();
   const errEl = document.getElementById('landing-error');
 
   if (!code || code.length !== 4) { showError(errEl, 'أدخل رمز الغرفة (4 أحرف)'); return; }
   if (!name)                       { showError(errEl, 'أدخل اسمك'); return; }
 
   errEl.classList.add('hidden');
-
   socket.emit('joinRoom', { code, name }, res => {
     if (!res.success) { showError(errEl, res.reason || 'خطأ في الانضمام'); return; }
-    myRole       = 'player';
-    myPlayerId   = res.playerId;
+    myRole = 'player'; myPlayerId = res.playerId;
     myPlayerName = res.playerName || name;
-    roomCode     = res.roomState?.code || code;
+    roomCode = res.roomState?.code || code;
     localStorage.setItem(LS_ROLE,   'player');
     localStorage.setItem(LS_ROOM,   roomCode);
     localStorage.setItem(LS_PID,    res.playerId);
@@ -905,7 +1206,7 @@ function submitWord() {
   const errEl = document.getElementById('submit-error');
   const word  = input.value.trim();
 
-  if (!word) { showError(errEl, 'الكلمة فارغة'); return; }
+  if (!word)         { showError(errEl, 'الكلمة فارغة'); return; }
   if (/\s/.test(word)) { showError(errEl, 'كلمة واحدة فقط بدون مسافات'); return; }
 
   errEl.classList.add('hidden');
@@ -915,18 +1216,11 @@ function submitWord() {
 
   socket.emit('submitWord', { word }, res => {
     if (res && !res.success && !res.pending) {
-      // Auto-eliminated — handled by playerEliminated event
       input.value = '';
     } else if (res?.pending) {
       input.value = '';
       document.getElementById('pending-notice').classList.remove('hidden');
     }
-  });
-}
-
-function startNewGame() {
-  socket.emit('startGame', res => {
-    if (res && !res.success) alert(res.reason || 'خطأ في بدء اللعبة');
   });
 }
 
@@ -938,8 +1232,6 @@ function showError(el, msg) {
 
 function escHtml(str) {
   return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
