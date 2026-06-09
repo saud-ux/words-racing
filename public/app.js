@@ -22,6 +22,12 @@ let isEliminated = false;
 let myElimReason = null;
 let pendingDropId = null;  // player the host is about to drop
 
+// ── Animation state tracking ──────────────────────────────────────────────────
+let prevCurrentWord  = null;   // detect word acceptance
+let prevStatus       = null;   // detect game-start transition
+let prevPendingWord  = null;   // detect new pending word for host
+let lastTimerSecond  = -1;     // detect second boundary for tick animation
+
 // ── Audio & haptics ─────────────────────────────────────────────────────────
 const LS_SOUND = 'wr_sound';
 let audioCtx     = null;
@@ -93,6 +99,42 @@ function sfxWin(big) {
   if (big) tone(1318.5, { type: 'triangle', dur: 0.5, vol: 0.3, when: notes.length * 0.12 });
 }
 
+function sfxAccept() {
+  // Bright ascending arpeggio — satisfying confirmation
+  tone(523, { type: 'triangle', dur: 0.1,  vol: 0.26, when: 0    });
+  tone(659, { type: 'triangle', dur: 0.12, vol: 0.26, when: 0.07 });
+  tone(784, { type: 'triangle', dur: 0.22, vol: 0.30, when: 0.15 });
+}
+
+function sfxReject() {
+  // Short descending growl — unmistakably wrong
+  tone(280, { type: 'sawtooth', dur: 0.22, vol: 0.28, glideTo: 100 });
+}
+
+function sfxSubmit() {
+  // Subtle upward flick when a word is sent
+  tone(660, { type: 'sine', dur: 0.10, vol: 0.11, glideTo: 990 });
+}
+
+function sfxGameStart() {
+  // Dramatic fanfare — builds excitement
+  tone(392,  { type: 'triangle', dur: 0.15, vol: 0.32, when: 0    });
+  tone(523,  { type: 'triangle', dur: 0.18, vol: 0.34, when: 0.15 });
+  tone(784,  { type: 'triangle', dur: 0.30, vol: 0.38, when: 0.32 });
+  tone(1047, { type: 'triangle', dur: 0.50, vol: 0.36, when: 0.55 });
+}
+
+function sfxCountdownBlip() {
+  // Single blip for 3-2-1 countdown
+  tone(440, { type: 'square', dur: 0.07, vol: 0.22 });
+}
+
+function sfxNewPending() {
+  // Alert ping when a word arrives for the host to judge
+  tone(1100, { type: 'sine', dur: 0.18, vol: 0.18 });
+  tone(880,  { type: 'sine', dur: 0.14, vol: 0.12, when: 0.12 });
+}
+
 function flashDanger() {
   const v = document.getElementById('danger-vignette');
   if (!v) return;
@@ -105,6 +147,84 @@ function clearTension() {
   if (v) v.classList.remove('active', 'mine');
   document.querySelectorAll('.timer-container').forEach(el => el.classList.remove('shake'));
   lastTickAt = 0;
+}
+
+// ── Animation helpers ─────────────────────────────────────────────────────────
+
+function animatePop(el) {
+  if (!el) return;
+  el.classList.remove('anim-pop');
+  void el.offsetWidth;
+  el.classList.add('anim-pop');
+}
+
+function animateLetterFlash(el) {
+  if (!el) return;
+  el.classList.remove('anim-letter-flash');
+  void el.offsetWidth;
+  el.classList.add('anim-letter-flash');
+}
+
+function animateTimerTick(el) {
+  if (!el) return;
+  el.classList.remove('anim-timer-tick');
+  void el.offsetWidth;
+  el.classList.add('anim-timer-tick');
+}
+
+// 3-2-1 countdown splash then انطلق
+function showGameStartSplash() {
+  sfxGameStart();
+  const overlay = document.getElementById('splash-overlay');
+  if (!overlay) return;
+  overlay.classList.remove('hidden');
+  const textEl = overlay.querySelector('.splash-text');
+  const steps  = ['٣', '٢', '١', 'انطلق!'];
+  let i = 0;
+  const tick = () => {
+    if (i >= steps.length) { overlay.classList.add('hidden'); return; }
+    if (i < 3) sfxCountdownBlip();
+    textEl.textContent = steps[i];
+    textEl.classList.remove('anim-splash');
+    void textEl.offsetWidth;
+    textEl.classList.add('anim-splash');
+    i++;
+    setTimeout(tick, i < steps.length ? 380 : 720);
+  };
+  tick();
+}
+
+// CSS confetti burst on win
+function spawnConfetti(count = 90) {
+  const container = document.createElement('div');
+  container.className = 'confetti-container';
+  document.body.appendChild(container);
+  const colors = ['#f59e0b','#10b981','#3b82f6','#ef4444','#8b5cf6','#ec4899','#f97316'];
+  for (let i = 0; i < count; i++) {
+    const p = document.createElement('div');
+    p.className = 'confetti-particle';
+    const size = 5 + Math.random() * 9;
+    p.style.cssText = [
+      `left:${Math.random() * 100}%`,
+      `background:${colors[Math.floor(Math.random() * colors.length)]}`,
+      `width:${size}px`,
+      `height:${size}px`,
+      `animation-duration:${1.6 + Math.random() * 2.4}s`,
+      `animation-delay:${Math.random() * 0.8}s`,
+      `border-radius:${Math.random() > 0.5 ? '50%' : '2px'}`,
+    ].join(';');
+    container.appendChild(p);
+  }
+  setTimeout(() => container.remove(), 5500);
+}
+
+// Full-screen red flash when YOU are eliminated
+function flashElimScreen() {
+  const el = document.getElementById('elim-flash-overlay');
+  if (!el) return;
+  el.classList.remove('anim-elim-flash');
+  void el.offsetWidth;
+  el.classList.add('anim-elim-flash');
 }
 
 // Map x in [x0,x1] to [y0,y1], clamped
@@ -220,6 +340,44 @@ function setupSocketListeners() {
 // ── Central render dispatch ───────────────────────────────────────────────────
 function handleRoomState(state) {
   if (!state) return;
+
+  // ── Detect transitions for animations / sounds ─────────────────────────────
+  const prev = roomState;
+  if (prev) {
+    // Lobby → Playing: show countdown splash
+    if (state.status === 'playing' && prev.status === 'lobby') {
+      showGameStartSplash();
+    }
+
+    // New word accepted (currentWord changed)
+    const prevWord = prev.game?.currentWord;
+    const newWord  = state.game?.currentWord;
+    if (newWord && newWord !== prevWord && prevCurrentWord !== undefined) {
+      sfxAccept();
+      requestAnimationFrame(() => {
+        animatePop(document.getElementById('player-current-word'));
+        animatePop(document.getElementById('host-current-word'));
+        animateLetterFlash(document.getElementById('player-required-letter'));
+        animateLetterFlash(document.getElementById('host-required-letter'));
+      });
+    }
+    prevCurrentWord = newWord ?? null;
+
+    // New pending word arrived for host
+    const prevPend = prev.game?.pendingWord;
+    const newPend  = state.game?.pendingWord;
+    if (newPend && newPend !== prevPend) {
+      sfxNewPending();
+      requestAnimationFrame(() => {
+        const panel = document.getElementById('host-approval-panel');
+        if (panel && !panel.classList.contains('hidden')) animatePop(panel);
+      });
+    }
+    prevPendingWord = newPend ?? null;
+  }
+
+  prevStatus = state.status;
+
   roomState = state;
   const { status, game } = state;
 
@@ -340,6 +498,7 @@ function renderPlayerGame(state) {
   const btn     = document.getElementById('btn-submit-word');
   input.disabled = !canSubmit;
   btn.disabled   = !canSubmit;
+  document.querySelector('.submit-area')?.classList.toggle('my-turn', canSubmit);
 
   document.getElementById('pending-notice').classList.toggle('hidden', !(isPending && isMeTurn));
 
@@ -453,14 +612,17 @@ function renderWordsList(listId, countId, words, nextLetter) {
   if (!ul) return;
   if (ct) ct.textContent = (words || []).length;
   ul.innerHTML = '';
-  (words || []).slice().reverse().forEach((w, ri) => {
+  (words || []).slice().reverse().forEach((entry, ri) => {
+    const wordText   = typeof entry === 'object' ? entry.word       : entry;
+    const playerName = typeof entry === 'object' ? entry.playerName : null;
     const idx  = (words.length - ri);
     const next = (ri === 0 && nextLetter) ? nextLetter : '';
     const li   = document.createElement('li');
     li.className = 'word-item';
     li.innerHTML = `
       <span class="word-index">${idx}</span>
-      <span class="word-text">${escHtml(w)}</span>
+      <span class="word-text">${escHtml(wordText)}</span>
+      ${playerName ? `<span class="word-by">${escHtml(playerName)}</span>` : ''}
       ${next ? `<span class="word-letter">→ ${next}</span>` : ''}
     `;
     ul.appendChild(li);
@@ -495,11 +657,13 @@ function hidePausedOverlay() {
 // ── Elimination event ─────────────────────────────────────────────────────────
 function handlePlayerEliminated(data) {
   const isMe = data.playerId === myPlayerId;
+  if (data.reason === 'رفضها الحكم') sfxReject();
   sfxEliminated(isMe);
   clearTension();
   if (isMe) {
     vibrate([200, 80, 200]);
     flashDanger();
+    flashElimScreen();
     isEliminated  = true;
     myElimReason  = data.reason;
     showScreen('eliminated');
@@ -513,6 +677,7 @@ function handleGameEnded(data) {
   sfxWin(iWon || myRole === 'host');
   if (iWon) vibrate([100, 50, 100, 50, 220]);
   clearTension();
+  if (iWon || myRole === 'host') spawnConfetti(iWon ? 110 : 70);
   // roomState with status='ended' will follow; just ensure we reset input state
   const input = document.getElementById('player-word-input');
   if (input) { input.value = ''; input.disabled = true; }
@@ -561,9 +726,18 @@ function updateTimers() {
   const total = game?.timerSeconds || 10;
   const rem   = computeRemaining(game);
   const pct   = total > 0 ? rem / total : 0;
-  const color = rem <= 3 ? '#ef4444' : rem <= 5 ? '#f59e0b' : '#10b981';
-  const offset = RING_C * (1 - pct);
+  const color = rem <= 2 ? '#ef4444'
+              : rem <= 4 ? '#f97316'
+              : rem <= 7 ? '#f59e0b'
+              : '#10b981';
+  const offset  = RING_C * (1 - pct);
   const display = Math.ceil(rem);
+
+  // Pulse the timer number on each new second
+  if (game && display !== lastTimerSecond && display >= 0) {
+    lastTimerSecond = display;
+    document.querySelectorAll('.timer-number').forEach(animateTimerTick);
+  }
 
   for (const prefix of ['player', 'host']) {
     const ring = document.getElementById(`${prefix}-ring-fg`);
@@ -572,7 +746,12 @@ function updateTimers() {
       ring.style.strokeDashoffset = offset;
       ring.style.stroke = color;
     }
-    if (num) num.textContent = game ? display : '—';
+    if (num) {
+      num.textContent = game ? display : '—';
+      // Grow the number slightly as urgency increases
+      num.style.fontSize = rem <= 2 ? '2.6rem' : rem <= 4 ? '2.2rem' : '2rem';
+      num.style.color    = rem <= 4 ? color : '';
+    }
   }
 
   updateTension(game, rem);
@@ -732,6 +911,7 @@ function submitWord() {
   errEl.classList.add('hidden');
   input.disabled = true;
   document.getElementById('btn-submit-word').disabled = true;
+  sfxSubmit();
 
   socket.emit('submitWord', { word }, res => {
     if (res && !res.success && !res.pending) {

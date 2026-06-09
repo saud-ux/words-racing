@@ -841,3 +841,220 @@ body {
 .player-game-topbar .turn-status {
   flex: 1;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   GAME FEEL IMPROVEMENTS
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Word / letter pop-in ────────────────────────────────────────────────────── */
+@keyframes pop {
+  0%   { transform: scale(1);    }
+  35%  { transform: scale(1.22); }
+  65%  { transform: scale(0.94); }
+  100% { transform: scale(1);    }
+}
+.anim-pop { animation: pop 0.38s cubic-bezier(0.34, 1.56, 0.64, 1); }
+
+/* ── Required-letter flash ───────────────────────────────────────────────────── */
+@keyframes letter-flash {
+  0%   { background: var(--amber); color: #0f172a; transform: scale(1.18); box-shadow: 0 0 20px rgba(245,158,11,0.7); }
+  100% { background: var(--surface2); color: var(--amber); transform: scale(1); box-shadow: none; }
+}
+.anim-letter-flash {
+  animation: letter-flash 0.55s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* ── Timer number bounce on each second ─────────────────────────────────────── */
+@keyframes timer-tick {
+  0%   { transform: scale(1.3); }
+  100% { transform: scale(1);   }
+}
+.anim-timer-tick { animation: timer-tick 0.16s ease-out; }
+
+/* ── Submit area glows when it's your turn ───────────────────────────────────── */
+.submit-area.my-turn {
+  border-color: var(--emerald) !important;
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2), 0 0 18px rgba(16, 185, 129, 0.12);
+  transition: box-shadow 0.3s, border-color 0.3s;
+}
+.submit-area.my-turn #btn-submit-word {
+  animation: pulse-green 1.2s ease-in-out infinite;
+  box-shadow: 0 0 14px rgba(16, 185, 129, 0.45);
+}
+.submit-area.my-turn #player-word-input {
+  border-color: var(--emerald);
+}
+
+/* ── Player items: slide in on render ────────────────────────────────────────── */
+@keyframes player-enter {
+  from { opacity: 0; transform: translateX(16px); }
+  to   { opacity: 1; transform: translateX(0);    }
+}
+.player-item { animation: player-enter 0.22s ease both; }
+
+/* Stagger the entrance so they don't all pop at once */
+.player-item:nth-child(1)  { animation-delay: 0.00s; }
+.player-item:nth-child(2)  { animation-delay: 0.04s; }
+.player-item:nth-child(3)  { animation-delay: 0.08s; }
+.player-item:nth-child(4)  { animation-delay: 0.12s; }
+.player-item:nth-child(5)  { animation-delay: 0.16s; }
+.player-item:nth-child(6)  { animation-delay: 0.20s; }
+.player-item:nth-child(7)  { animation-delay: 0.24s; }
+.player-item:nth-child(8)  { animation-delay: 0.28s; }
+
+/* ── Words-list player attribution ───────────────────────────────────────────── */
+.word-by {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  margin-right: auto;
+  opacity: 0.8;
+}
+
+/* ── Approval panel pop when pending word arrives ────────────────────────────── */
+.approval-panel.anim-pop {
+  animation: pop 0.38s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* ── Enhanced turn banner ─────────────────────────────────────────────────────── */
+.turn-active {
+  background: #0d2318;
+  border-color: var(--emerald);
+  color: var(--emerald);
+  animation: pulse-green 1.2s ease-in-out infinite, turn-glow 1.2s ease-in-out infinite;
+  text-shadow: 0 0 12px rgba(16, 185, 129, 0.5);
+}
+@keyframes turn-glow {
+  0%, 100% { box-shadow: 0 0 0  0  rgba(16,185,129,0.25); }
+  50%      { box-shadow: 0 0 0 12px rgba(16,185,129,0);   }
+}
+
+/* ── 3-2-1 countdown splash overlay ─────────────────────────────────────────── */
+.splash-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 400;
+  background: rgba(10, 15, 28, 0.78);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+
+.splash-text {
+  font-size: 7rem;
+  font-weight: 800;
+  color: var(--amber);
+  text-shadow: 0 0 40px rgba(245, 158, 11, 0.7);
+  user-select: none;
+}
+
+@keyframes splash {
+  0%   { opacity: 0; transform: scale(0.4); }
+  30%  { opacity: 1; transform: scale(1.15); }
+  60%  { transform: scale(0.95); opacity: 1; }
+  80%  { transform: scale(1);    opacity: 1; }
+  100% { opacity: 0; transform: scale(1.3); }
+}
+.anim-splash { animation: splash 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
+
+/* ── Elimination screen flash ─────────────────────────────────────────────────── */
+#elim-flash-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 350;
+  opacity: 0;
+  background: rgba(239, 68, 68, 0.5);
+}
+@keyframes elim-flash {
+  0%   { opacity: 1; }
+  100% { opacity: 0; }
+}
+.anim-elim-flash { animation: elim-flash 0.7s ease-out forwards; }
+
+/* ── Confetti particles ──────────────────────────────────────────────────────── */
+.confetti-container {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 380;
+  overflow: hidden;
+}
+.confetti-particle {
+  position: absolute;
+  top: -12px;
+  opacity: 1;
+  animation: confetti-fall linear forwards;
+}
+@keyframes confetti-fall {
+  0%   { transform: translateY(0)    rotate(0deg);   opacity: 1; }
+  80%  { opacity: 1; }
+  100% { transform: translateY(105vh) rotate(780deg); opacity: 0; }
+}
+
+/* ── Winner card — more festive ──────────────────────────────────────────────── */
+.winner-card {
+  border-color: var(--amber);
+  box-shadow: 0 0 0 1px var(--amber-dim), 0 0 40px rgba(245, 158, 11, 0.2);
+}
+.winner-trophy { animation: trophy-bounce 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) 0.2s both; }
+@keyframes trophy-bounce {
+  0%   { transform: scale(0) rotate(-15deg); }
+  60%  { transform: scale(1.25) rotate(8deg); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+.winner-name {
+  animation: winner-glow 2s ease-in-out infinite;
+}
+@keyframes winner-glow {
+  0%, 100% { text-shadow: 0 0 0 transparent; }
+  50%      { text-shadow: 0 0 24px rgba(245, 158, 11, 0.55); }
+}
+
+/* ── Word display — subtle hover effect ──────────────────────────────────────── */
+.current-word {
+  transition: color 0.2s;
+}
+
+/* ── Approval word — pulse when it arrives ───────────────────────────────────── */
+.approval-word {
+  animation: amber-pulse 1.4s ease-in-out infinite;
+}
+@keyframes amber-pulse {
+  0%, 100% { text-shadow: none; }
+  50%      { text-shadow: 0 0 18px rgba(245, 158, 11, 0.5); }
+}
+
+/* ── Paused overlay — more dramatic ──────────────────────────────────────────── */
+.overlay-box {
+  animation: overlay-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes overlay-in {
+  from { transform: scale(0.8); opacity: 0; }
+  to   { transform: scale(1);   opacity: 1; }
+}
+
+/* ── Lobby waiting pulse ─────────────────────────────────────────────────────── */
+.waiting-msg {
+  animation: waiting-pulse 2.5s ease-in-out infinite;
+}
+@keyframes waiting-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.6; }
+}
+
+/* ── Screen transition — more dynamic slide ──────────────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0)    scale(1);    }
+}
+
+/* Respect reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  .anim-pop, .anim-letter-flash, .anim-timer-tick, .anim-splash,
+  .anim-elim-flash, .confetti-particle, .player-item,
+  .splash-text, .winner-trophy, .winner-name, .approval-word,
+  .submit-area.my-turn #btn-submit-word,
+  .turn-active { animation: none !important; }
+}
