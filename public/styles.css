@@ -769,4 +769,75 @@ body {
     gap: 8px;
   }
   .topbar-code { width: 100%; }
+
+  .timer-opts { gap: 6px; }
+  .timer-opt  { padding: 8px 12px; font-size: 0.85rem; }
+
+  .player-game-topbar { gap: 8px; }
+}
+
+/* ── Timer mode selector (host lobby) ───────────────────────────────────────── */
+.timer-setting { display: flex; flex-direction: column; gap: 10px; }
+
+.timer-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.timer-opt {
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 16px;
+  background: var(--surface2);
+  color: var(--text-muted);
+  font-family: 'Tajawal', sans-serif;
+  font-size: 0.95rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.timer-opt:hover { border-color: var(--amber); color: var(--text); }
+
+.timer-opt.active {
+  border-color: var(--amber);
+  background: var(--amber);
+  color: #0f172a;
+}
+
+/* ── Leave button ─────────────────────────────────────────────────────────────── */
+.btn-leave {
+  background: transparent;
+  border: 1.5px solid var(--red);
+  color: var(--red);
+  font-family: 'Tajawal', sans-serif;
+  font-size: 0.95rem;
+  font-weight: 700;
+  border-radius: var(--radius-sm);
+  padding: 10px 20px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+  width: 100%;
+}
+.btn-leave:hover { background: var(--red); color: #fff; }
+
+.btn-leave-sm {
+  width: auto;
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+/* ── Player game topbar (turn status + leave) ────────────────────────────────── */
+.player-game-topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.player-game-topbar .turn-status {
+  flex: 1;
 }

@@ -66,6 +66,18 @@
         <ul id="host-lobby-players" class="player-list"></ul>
       </div>
 
+      <div class="timer-setting">
+        <h3 class="section-title">وقت كل دور</h3>
+        <div class="timer-opts" id="host-timer-opts">
+          <button class="timer-opt active" data-secs="dynamic">تلقائي</button>
+          <button class="timer-opt" data-secs="5">5 ث</button>
+          <button class="timer-opt" data-secs="10">10 ث</button>
+          <button class="timer-opt" data-secs="15">15 ث</button>
+          <button class="timer-opt" data-secs="20">20 ث</button>
+          <button class="timer-opt" data-secs="30">30 ث</button>
+        </div>
+      </div>
+
       <button id="btn-start-game" class="btn btn-primary btn-lg btn-start">
         بدء اللعبة
       </button>
@@ -94,6 +106,10 @@
         </h3>
         <ul id="player-lobby-players" class="player-list"></ul>
       </div>
+
+      <button id="btn-leave-lobby" class="btn btn-leave">
+        مغادرة الغرفة
+      </button>
     </div>
   </div>
 
@@ -105,8 +121,13 @@
 
       <!-- Main column -->
       <div class="game-main">
-        <div id="turn-status" class="turn-status turn-waiting">
-          في انتظار دورك
+        <div class="player-game-topbar">
+          <div id="turn-status" class="turn-status turn-waiting">
+            في انتظار دورك
+          </div>
+          <button id="btn-leave-game" class="btn btn-leave btn-leave-sm" title="مغادرة اللعبة">
+            خروج
+          </button>
         </div>
 
         <div class="word-display card">

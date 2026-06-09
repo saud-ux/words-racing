@@ -107,6 +107,7 @@ function pubRoom(room) {
     code: room.code,
     status: room.status,
     lastWinner: room.lastWinner || null,
+    timerMode: room.timerMode,
     players,
     game: gs ? {
       currentWord:         gs.currentWord,
@@ -144,8 +145,9 @@ function aliveSorted(room) {
 function startTimer(room) {
   const gs = room.gameState;
   const alive = aliveSorted(room).length;
-  gs.timerSeconds        = timerSecs(alive);
-  gs.tierLabel           = tierLabel(alive);
+  const fixed = room.timerMode !== 'dynamic' && typeof room.timerMode === 'number';
+  gs.timerSeconds        = fixed ? room.timerMode : timerSecs(alive);
+  gs.tierLabel           = fixed ? `${room.timerMode} ثانية (ثابت)` : tierLabel(alive);
   gs.timerStartedAt      = Date.now();
   gs.timerStoppedAt      = null;
   gs.frozenTimeRemaining = null;
@@ -259,6 +261,7 @@ io.on('connection', socket => {
       code, hostToken, hostSocketId: socket.id,
       players: new Map(), gameState: null,
       status: 'lobby', joinCounter: 0, lastWinner: null,
+      timerMode: 'dynamic', // 'dynamic' or a fixed number of seconds
     });
     socket.join(code);
     Object.assign(socket.data, { roomCode: code, role: 'host', token: hostToken });
@@ -347,16 +350,18 @@ io.on('connection', socket => {
     if (alive.length === 0) return cb?.({ success: false, reason: 'لا يوجد لاعبون' });
 
     const first = alive[0];
+    const fixedTimer = room.timerMode !== 'dynamic' && typeof room.timerMode === 'number';
     room.status    = 'playing';
     room.gameState = {
       currentWord: null, requiredLetter: null,
       usedWords: [], usedWordKeys: new Set(),
       currentTurnPlayerId: first.id,
-      timerSeconds: timerSecs(alive.length), timerStartedAt: Date.now(),
+      timerSeconds: fixedTimer ? room.timerMode : timerSecs(alive.length),
+      timerStartedAt: Date.now(),
       timerStoppedAt: null, frozenTimeRemaining: null, timerHandle: null,
       pendingWord: null, pendingPlayerId: null,
       pausedReason: null, pausedForPlayerId: null,
-      tierLabel: tierLabel(alive.length),
+      tierLabel: fixedTimer ? `${room.timerMode} ثانية (ثابت)` : tierLabel(alive.length),
       events: [],
     };
     pushEvent(room, {
@@ -646,6 +651,40 @@ io.on('connection', socket => {
       else return cb?.({ success: false, reason: 'اللاعب غير موجود أو خارج اللعبة' });
     }
     endGame(room, winner);
+    cb?.({ success: true });
+  });
+
+  // ── setTimerMode — host sets per-turn time before game starts ───────────────
+  socket.on('setTimerMode', ({ mode }, cb) => {
+    const room = rooms.get(socket.data.roomCode);
+    if (!room || socket.data.role !== 'host') return cb?.({ success: false });
+    if (room.status !== 'lobby' && room.status !== 'ended') return cb?.({ success: false });
+    const valid = mode === 'dynamic' || (typeof mode === 'number' && [5, 10, 15, 20, 30].includes(mode));
+    if (!valid) return cb?.({ success: false, reason: 'قيمة غير صالحة' });
+    room.timerMode = mode;
+    broadcast(room);
+    cb?.({ success: true });
+  });
+
+  // ── leaveRoom — player voluntarily leaves ────────────────────────────────────
+  socket.on('leaveRoom', (_, cb) => {
+    const room = rooms.get(socket.data.roomCode);
+    if (!room || socket.data.role !== 'player') return cb?.({ success: false });
+    const { playerId } = socket.data;
+    const player = room.players.get(playerId);
+    if (!player) return cb?.({ success: false });
+
+    if (room.status === 'lobby' || room.status === 'ended') {
+      room.players.delete(playerId);
+      socket.leave(room.code);
+      broadcast(room);
+    } else if (room.status === 'playing' || room.status === 'paused') {
+      if (player.alive) {
+        pushEvent(room, { type: 'dropped', playerId, playerName: player.name });
+        doEliminate(room, playerId, 'انسحب');
+      }
+      socket.leave(room.code);
+    }
     cb?.({ success: true });
   });
 

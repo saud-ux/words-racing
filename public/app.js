@@ -214,6 +214,7 @@ function setupSocketListeners() {
   socket.on('gameResumed',      () => handleRoomState(roomState)); // will get fresh roomState momentarily
   socket.on('yourTurn',         handleYourTurn);
   socket.on('pendingApproval',  handlePendingApproval);
+  socket.on('kickedFromRoom',   () => { clearSession(); showScreen('landing'); });
 }
 
 // ── Central render dispatch ───────────────────────────────────────────────────
@@ -291,6 +292,12 @@ function renderHostLobby(state) {
   // Show new-game hint if returning from ended game
   const startBtn = document.getElementById('btn-start-game');
   startBtn.textContent = state.lastWinner ? '🔄 بدء لعبة جديدة' : 'بدء اللعبة';
+  // Sync timer mode buttons
+  const currentMode = state.timerMode ?? 'dynamic';
+  document.querySelectorAll('#host-timer-opts .timer-opt').forEach(btn => {
+    const val = btn.dataset.secs === 'dynamic' ? 'dynamic' : parseInt(btn.dataset.secs, 10);
+    btn.classList.toggle('active', val === currentMode || (btn.dataset.secs === 'dynamic' && currentMode === 'dynamic'));
+  });
 }
 
 // ── Render: player lobby ──────────────────────────────────────────────────────
@@ -639,6 +646,36 @@ function setupUIListeners() {
 
   // New game (winner screen — host only)
   document.getElementById('btn-winner-new-game').addEventListener('click', startNewGame);
+
+  // Timer mode selector (host lobby)
+  document.getElementById('host-timer-opts').addEventListener('click', e => {
+    const btn = e.target.closest('.timer-opt');
+    if (!btn) return;
+    const raw  = btn.dataset.secs;
+    const mode = raw === 'dynamic' ? 'dynamic' : parseInt(raw, 10);
+    socket.emit('setTimerMode', { mode });
+  });
+
+  // Leave lobby (player)
+  document.getElementById('btn-leave-lobby').addEventListener('click', () => {
+    socket.emit('leaveRoom', {}, () => {
+      clearSession();
+      myRole = null; myPlayerId = null; myPlayerName = null; roomCode = null; roomState = null;
+      isEliminated = false; myElimReason = null;
+      showScreen('landing');
+    });
+  });
+
+  // Leave game (player during game)
+  document.getElementById('btn-leave-game').addEventListener('click', () => {
+    if (!confirm('هل أنت متأكد أنك تريد مغادرة اللعبة؟')) return;
+    socket.emit('leaveRoom', {}, () => {
+      clearSession();
+      myRole = null; myPlayerId = null; myPlayerName = null; roomCode = null; roomState = null;
+      isEliminated = false; myElimReason = null;
+      showScreen('landing');
+    });
+  });
 }
 
 // ── Sound / haptics toggle ────────────────────────────────────────────────────
