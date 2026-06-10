@@ -37,7 +37,10 @@
   <!-- HOST LOBBY -->
   <div id="screen-host-lobby" class="screen hidden" style="display:none">
     <div class="card lobby-card">
-      <div class="role-badge">الحكم / الهوست</div>
+      <div class="host-lobby-topbar">
+        <div class="role-badge">الحكم / الهوست</div>
+        <button id="btn-host-exit-lobby" class="btn-leave btn-leave-sm">خروج من الغرفة</button>
+      </div>
       <div class="room-code-block">
         <span class="room-code-label">رمز الغرفة</span>
         <span id="host-room-code" class="room-code">----</span>
@@ -152,6 +155,7 @@
       <div class="role-badge role-badge-sm">الحكم</div>
       <div class="topbar-code">غرفة: <strong id="host-game-code">----</strong></div>
       <div id="host-tier-badge" class="tier-badge">—</div>
+      <button id="btn-host-exit-game" class="btn-leave btn-leave-sm">خروج</button>
     </div>
     <div class="game-layout">
       <div class="game-main">
@@ -275,6 +279,7 @@
       <div class="winner-label">الفائز</div>
       <div id="winner-name" class="winner-name"></div>
       <button id="btn-winner-new-game" class="btn btn-primary btn-lg hidden">🔄 بدء لعبة جديدة</button>
+      <button id="btn-host-exit-winner" class="btn-leave">خروج من الغرفة</button>
     </div>
   </div>
 
