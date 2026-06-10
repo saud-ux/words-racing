@@ -22,7 +22,6 @@ let myElimReason  = null;
 let pendingDropId = null;
 let pendingKickId = null;
 let lastSeenEventId = null;
-let lastPendingId   = null;
 let prevCurrentWord = null;
 let lastTimerSecond = -1;
 
@@ -54,13 +53,11 @@ function vibrate(pattern) {
   }
 }
 
-// Core tone generator
 function tone(freq, {
   type = 'sine', dur = 0.08, vol = 0.2,
   attack = 0.005, decay = 0, sustain = 1,
   release = 0.03, glideTo = null, when = 0,
   filter = null, filterFreq = 2000, filterQ = 1,
-  distortion = false
 } = {}) {
   if (!soundEnabled || !audioCtx) return;
   const t0   = audioCtx.currentTime + when;
@@ -71,7 +68,6 @@ function tone(freq, {
   osc.frequency.setValueAtTime(freq, t0);
   if (glideTo) osc.frequency.exponentialRampToValueAtTime(glideTo, t0 + dur);
 
-  // ADSR envelope
   const peakTime     = t0 + attack;
   const decayEnd     = peakTime + decay;
   const sustainLevel = vol * sustain;
@@ -83,9 +79,6 @@ function tone(freq, {
   gain.gain.setValueAtTime(sustainLevel, releaseStart);
   gain.gain.exponentialRampToValueAtTime(0.0001, releaseStart + release);
 
-  let node = gain;
-
-  // Optional filter
   if (filter) {
     const bq = audioCtx.createBiquadFilter();
     bq.type = filter;
@@ -102,7 +95,6 @@ function tone(freq, {
   osc.stop(t0 + dur + release + 0.05);
 }
 
-// Noise burst (for impact effects)
 function noise(dur = 0.05, vol = 0.15, when = 0, filterFreq = 800) {
   if (!soundEnabled || !audioCtx) return;
   const t0          = audioCtx.currentTime + when;
@@ -131,118 +123,91 @@ function noise(dur = 0.05, vol = 0.15, when = 0, filterFreq = 800) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// SOUND EFFECTS — complete game-show sound design
+// SOUND EFFECTS
 // ═══════════════════════════════════════════════════════════
 
-// 1. SUBMIT — satisfying "swoosh-click" when word is sent
 function sfxSubmit() {
-  tone(800,  { type: 'sine',     dur: 0.06, vol: 0.18, attack: 0.002, glideTo: 1200, release: 0.04 });
-  noise(0.04, 0.1, 0.04, 1200);
+  tone(800,  { type: 'sine', dur: 0.06, vol: 0.14, attack: 0.002, glideTo: 1100, release: 0.04 });
+  noise(0.03, 0.07, 0.04, 1100);
 }
 
-// 2. ACCEPT — bright 3-note victory arpeggio
 function sfxAccept() {
-  tone(523,  { type: 'triangle', dur: 0.12, vol: 0.28, attack: 0.004, decay: 0.04, sustain: 0.7, release: 0.08, when: 0    });
-  tone(659,  { type: 'triangle', dur: 0.14, vol: 0.28, attack: 0.004, decay: 0.04, sustain: 0.7, release: 0.1,  when: 0.08 });
-  tone(784,  { type: 'triangle', dur: 0.22, vol: 0.32, attack: 0.004, decay: 0.06, sustain: 0.8, release: 0.14, when: 0.16 });
-  // Sparkle overtone
-  tone(1568, { type: 'sine',     dur: 0.18, vol: 0.09, attack: 0.01,  release: 0.12, when: 0.18 });
+  tone(523,  { type: 'triangle', dur: 0.12, vol: 0.22, attack: 0.004, decay: 0.04, sustain: 0.7, release: 0.08, when: 0    });
+  tone(659,  { type: 'triangle', dur: 0.14, vol: 0.22, attack: 0.004, decay: 0.04, sustain: 0.7, release: 0.1,  when: 0.08 });
+  tone(784,  { type: 'triangle', dur: 0.22, vol: 0.24, attack: 0.004, decay: 0.06, sustain: 0.8, release: 0.14, when: 0.16 });
 }
 
-// 3. REJECT — heavy downward buzzer
 function sfxReject() {
-  tone(220, { type: 'sawtooth', dur: 0.28, vol: 0.35, attack: 0.003, decay: 0.05, sustain: 0.8, glideTo: 80,  release: 0.1 });
-  tone(180, { type: 'square',   dur: 0.22, vol: 0.18, attack: 0.003, glideTo: 60, release: 0.08, when: 0.02 });
-  noise(0.08, 0.18, 0, 300);
+  tone(220, { type: 'sawtooth', dur: 0.28, vol: 0.28, attack: 0.003, decay: 0.05, sustain: 0.8, glideTo: 80,  release: 0.1 });
+  noise(0.08, 0.14, 0, 300);
 }
 
-// 4. YOUR TURN — uplifting two-tone ping
 function sfxYourTurn() {
-  tone(880,  { type: 'triangle', dur: 0.15, vol: 0.3,  attack: 0.005, decay: 0.05, sustain: 0.6, release: 0.12 });
-  tone(1320, { type: 'triangle', dur: 0.22, vol: 0.28, attack: 0.005, decay: 0.06, sustain: 0.6, release: 0.16, when: 0.1 });
+  tone(740,  { type: 'triangle', dur: 0.14, vol: 0.22, attack: 0.005, decay: 0.05, sustain: 0.6, release: 0.12 });
+  tone(1110, { type: 'triangle', dur: 0.2,  vol: 0.2,  attack: 0.005, decay: 0.06, sustain: 0.6, release: 0.16, when: 0.1 });
 }
 
-// 5. ELIMINATED (other player) — dark descending fall
 function sfxElimOther() {
-  tone(330, { type: 'sawtooth', dur: 0.45, vol: 0.22, attack: 0.004, glideTo: 80,  release: 0.12 });
+  tone(330, { type: 'sawtooth', dur: 0.45, vol: 0.18, attack: 0.004, glideTo: 80,  release: 0.12 });
 }
 
-// 6. ELIMINATED (me!) — dramatic game-over crash
 function sfxElimMe() {
-  tone(220, { type: 'sawtooth', dur: 0.6,  vol: 0.42, attack: 0.003, glideTo: 55,  release: 0.2 });
-  tone(160, { type: 'square',   dur: 0.5,  vol: 0.22, attack: 0.003, glideTo: 40,  release: 0.15, when: 0.05 });
-  noise(0.12, 0.3, 0, 200);
-  // Body thud
-  tone(60,  { type: 'sine',     dur: 0.3,  vol: 0.35, attack: 0.005, glideTo: 30,  release: 0.1,  when: 0.1 });
+  tone(220, { type: 'sawtooth', dur: 0.55, vol: 0.32, attack: 0.003, glideTo: 55,  release: 0.18 });
+  tone(160, { type: 'square',   dur: 0.45, vol: 0.18, attack: 0.003, glideTo: 40,  release: 0.14, when: 0.05 });
+  noise(0.1, 0.22, 0, 200);
+  tone(60,  { type: 'sine',     dur: 0.28, vol: 0.28, attack: 0.005, glideTo: 30,  release: 0.1,  when: 0.1 });
 }
 
-// 7. WIN (winner player / host if big) — full fanfare
 function sfxWin(big) {
   const base = [523.25, 659.25, 783.99, 1046.5];
   base.forEach((f, i) => {
-    tone(f, { type: 'triangle', dur: 0.35, vol: big ? 0.36 : 0.22,
+    tone(f, { type: 'triangle', dur: 0.35, vol: big ? 0.3 : 0.18,
               attack: 0.006, decay: 0.08, sustain: 0.7, release: 0.18,
               when: i * 0.11 });
   });
   if (big) {
-    tone(1318.5, { type: 'triangle', dur: 0.55, vol: 0.32,
+    tone(1318.5, { type: 'triangle', dur: 0.55, vol: 0.26,
                    attack: 0.006, release: 0.22, when: base.length * 0.11 });
-    // Shimmer layer
-    [1047, 1319, 1568].forEach((f, i) =>
-      tone(f, { type: 'sine', dur: 0.4, vol: 0.1,
-                attack: 0.02, release: 0.2, when: base.length * 0.11 + i * 0.07 }));
   }
 }
 
-// 8. GAME START — dramatic build-up fanfare
 function sfxGameStart() {
-  // Low rumble build
-  tone(55,   { type: 'sine',     dur: 0.8,  vol: 0.18, attack: 0.1,  glideTo: 110, release: 0.2, when: 0 });
-  // Rising chord
-  tone(392,  { type: 'triangle', dur: 0.22, vol: 0.3,  attack: 0.01, decay: 0.06, sustain: 0.7, release: 0.14, when: 0.35 });
-  tone(523,  { type: 'triangle', dur: 0.26, vol: 0.32, attack: 0.01, decay: 0.06, sustain: 0.7, release: 0.16, when: 0.52 });
-  tone(784,  { type: 'triangle', dur: 0.40, vol: 0.36, attack: 0.01, decay: 0.08, sustain: 0.8, release: 0.2,  when: 0.70 });
-  tone(1047, { type: 'triangle', dur: 0.55, vol: 0.34, attack: 0.01, release: 0.24, when: 0.92 });
-  // Sparkle
-  tone(2093, { type: 'sine',     dur: 0.35, vol: 0.1,  attack: 0.02, release: 0.18, when: 1.0  });
+  tone(55,   { type: 'sine',     dur: 0.8,  vol: 0.14, attack: 0.1,  glideTo: 110, release: 0.2, when: 0 });
+  tone(392,  { type: 'triangle', dur: 0.22, vol: 0.24, attack: 0.01, decay: 0.06, sustain: 0.7, release: 0.14, when: 0.35 });
+  tone(523,  { type: 'triangle', dur: 0.26, vol: 0.26, attack: 0.01, decay: 0.06, sustain: 0.7, release: 0.16, when: 0.52 });
+  tone(784,  { type: 'triangle', dur: 0.40, vol: 0.28, attack: 0.01, decay: 0.08, sustain: 0.8, release: 0.2,  when: 0.70 });
+  tone(1047, { type: 'triangle', dur: 0.55, vol: 0.26, attack: 0.01, release: 0.24, when: 0.92 });
 }
 
-// 9. COUNTDOWN BLIP — clean digital beep
 function sfxCountdownBlip(step) {
   const freqs = [660, 770, 880];
   const f = freqs[Math.min(step, freqs.length - 1)] || 660;
-  tone(f,       { type: 'square',   dur: 0.06, vol: 0.24, attack: 0.002, release: 0.04 });
-  tone(f * 1.5, { type: 'sine',     dur: 0.06, vol: 0.09, attack: 0.002, release: 0.04 });
+  tone(f,       { type: 'square', dur: 0.06, vol: 0.18, attack: 0.002, release: 0.04 });
+  tone(f * 1.5, { type: 'sine',   dur: 0.06, vol: 0.07, attack: 0.002, release: 0.04 });
 }
 
-// 10. PENDING BELL — attention-grabbing host alert
 function sfxPending() {
-  tone(1047, { type: 'sine',     dur: 0.18, vol: 0.28, attack: 0.004, decay: 0.06, sustain: 0.5, release: 0.18 });
-  tone(784,  { type: 'sine',     dur: 0.22, vol: 0.22, attack: 0.004, release: 0.16, when: 0.16 });
-  tone(1047, { type: 'triangle', dur: 0.14, vol: 0.18, attack: 0.004, release: 0.12, when: 0.38 });
+  tone(1047, { type: 'sine',     dur: 0.18, vol: 0.22, attack: 0.004, decay: 0.06, sustain: 0.5, release: 0.18 });
+  tone(784,  { type: 'sine',     dur: 0.22, vol: 0.18, attack: 0.004, release: 0.16, when: 0.16 });
 }
 
-// 11. TICK — builds urgency as time runs out
 function sfxTick(urgent, vol) {
   if (urgent) {
-    tone(1320, { type: 'square', dur: 0.04, vol: vol * 1.2, attack: 0.001, release: 0.02 });
-    noise(0.025, vol * 0.3, 0, 2000);
+    tone(1320, { type: 'square', dur: 0.04, vol: vol * 1.0, attack: 0.001, release: 0.02 });
+    noise(0.02, vol * 0.25, 0, 2000);
   } else {
-    tone(880,  { type: 'square', dur: 0.038, vol: vol * 0.85, attack: 0.001, release: 0.025 });
+    tone(880,  { type: 'square', dur: 0.038, vol: vol * 0.7, attack: 0.001, release: 0.025 });
   }
 }
 
-// 12. HEARTBEAT — deep pulse in final 3 seconds
 function sfxHeartbeat(vol) {
-  tone(65,  { type: 'sine', dur: 0.14, vol: vol * 1.1, attack: 0.008, glideTo: 55, release: 0.06 });
-  tone(50,  { type: 'sine', dur: 0.18, vol: vol * 0.9, attack: 0.008, glideTo: 40, release: 0.08, when: 0.14 });
-  noise(0.05, vol * 0.25, 0, 120);
+  tone(65,  { type: 'sine', dur: 0.14, vol: vol * 1.0, attack: 0.008, glideTo: 55, release: 0.06 });
+  tone(50,  { type: 'sine', dur: 0.18, vol: vol * 0.8, attack: 0.008, glideTo: 40, release: 0.08, when: 0.14 });
 }
 
-// 13. KICK / DROP — sharp expulsion sound
 function sfxKick() {
-  tone(200, { type: 'sawtooth', dur: 0.2, vol: 0.3, attack: 0.003, glideTo: 50, release: 0.1 });
-  noise(0.06, 0.2, 0, 400);
+  tone(200, { type: 'sawtooth', dur: 0.2, vol: 0.24, attack: 0.003, glideTo: 50, release: 0.1 });
+  noise(0.06, 0.16, 0, 400);
 }
 
 function flashDanger() {
@@ -257,7 +222,6 @@ function clearTension() {
   if (v) v.classList.remove('active', 'mine');
   document.querySelectorAll('.timer-container').forEach(el => el.classList.remove('shake'));
   lastTickAt = 0;
-  updateTimerGlow(null);
 }
 
 // ── Animation helpers ─────────────────────────────────────────────────────────
@@ -286,34 +250,13 @@ function animateLetterFlash(el) {
   setTimeout(() => el.classList.remove('anim-letter-flash'), 700);
 }
 
-function animateTimerTick(el) {
-  if (!el) return;
-  el.classList.remove('anim-timer-tick');
-  void el.offsetWidth;
-  el.classList.add('anim-timer-tick');
-  setTimeout(() => el.classList.remove('anim-timer-tick'), 200);
-}
-
-// Update the inner glow color of the timer
-function updateTimerGlow(color) {
-  for (const id of ['player-timer-glow', 'host-timer-glow']) {
-    const el = document.getElementById(id);
-    if (!el) continue;
-    if (!color) {
-      el.style.background = '';
-    } else {
-      el.style.background = `radial-gradient(circle, ${color}18 0%, transparent 70%)`;
-    }
-  }
-}
-
 function showGameStartSplash() {
   sfxGameStart();
   const overlay = document.getElementById('splash-overlay');
   if (!overlay) return;
   overlay.classList.remove('hidden');
   const textEl = overlay.querySelector('.splash-text');
-  const steps  = ['٣', '٢', '١', 'انطلق!'];
+  const steps  = ['٣', '٢', '١', 'انطلق'];
   let i = 0;
   const tick = () => {
     if (i >= steps.length) { overlay.classList.add('hidden'); return; }
@@ -328,20 +271,20 @@ function showGameStartSplash() {
   tick();
 }
 
-function spawnConfetti(count = 90) {
+function spawnConfetti(count = 70) {
   const container = document.createElement('div');
   container.className = 'confetti-container';
   document.body.appendChild(container);
-  const colors = ['#c026d3','#f59e0b','#10b981','#6366f1','#ef4444','#ec4899','#f97316','#fff'];
+  const colors = ['#a8b5d1','#d4b896','#9ec1a3','#b5a8c9','#c9a8a8','#a8c9c2','#e5e8ed'];
   for (let i = 0; i < count; i++) {
     const p = document.createElement('div');
     p.className = 'confetti-particle';
-    const size = 5 + Math.random() * 10;
+    const size = 5 + Math.random() * 9;
     p.style.cssText = [
       `left:${Math.random() * 100}%`,
       `background:${colors[Math.floor(Math.random() * colors.length)]}`,
       `width:${size}px`, `height:${size}px`,
-      `animation-duration:${1.5 + Math.random() * 2.5}s`,
+      `animation-duration:${1.6 + Math.random() * 2.4}s`,
       `animation-delay:${Math.random() * 0.9}s`,
       `border-radius:${Math.random() > 0.4 ? '50%' : '2px'}`,
     ].join(';');
@@ -381,10 +324,10 @@ function updateTension(game, rem) {
     if (now - lastTickAt >= tickIntervalMs(rem)) {
       lastTickAt = now;
       if (rem <= 3) {
-        sfxHeartbeat(0.48 * intensity);
-        if (isMyTurn) vibrate(55);
+        sfxHeartbeat(0.42 * intensity);
+        if (isMyTurn) vibrate(45);
       } else {
-        sfxTick(rem <= 4.5, 0.1 * intensity);
+        sfxTick(rem <= 4.5, 0.09 * intensity);
       }
     }
   } else {
@@ -403,7 +346,8 @@ function updateTension(game, rem) {
 
 // ── Arabic letter helpers ─────────────────────────────────────────────────────
 function stripDiacritics(s) { return s.replace(/[ً-ْٰـ]/g, ''); }
-function unifyHamza(ch) { return 'أإآٱ'.includes(ch) ? 'ا' : ch; }
+// ء now unified with ا — same as أإآٱ
+function unifyHamza(ch) { return 'أإآٱء'.includes(ch) ? 'ا' : ch; }
 
 function requiredNextLetter(word) {
   const w = stripDiacritics(word).trim();
@@ -425,7 +369,6 @@ document.addEventListener('DOMContentLoaded', () => {
   tryReconnect();
 });
 
-// ── First-word input ──────────────────────────────────────────────────────────
 function setupFirstWordInput() {
   const input    = document.getElementById('input-first-word');
   const preview  = document.getElementById('first-word-letter-preview');
@@ -459,7 +402,6 @@ function setupFirstWordInput() {
   });
 }
 
-// ── Reconnect ─────────────────────────────────────────────────────────────────
 function tryReconnect() {
   const role = localStorage.getItem(LS_ROLE);
   const code = localStorage.getItem(LS_ROOM);
@@ -493,7 +435,6 @@ function clearSession() {
   [LS_ROLE, LS_ROOM, LS_PID, LS_PTOKEN, LS_HTOKEN, LS_NAME].forEach(k => localStorage.removeItem(k));
 }
 
-// ── Socket listeners ──────────────────────────────────────────────────────────
 function setupSocketListeners() {
   socket.on('roomState',        handleRoomState);
   socket.on('playerEliminated', handlePlayerEliminated);
@@ -504,18 +445,15 @@ function setupSocketListeners() {
   socket.on('kickedFromRoom',   handleKickedFromRoom);
 }
 
-// ── Central render dispatch ───────────────────────────────────────────────────
 function handleRoomState(state) {
   if (!state) return;
 
   const prev = roomState;
   if (prev) {
-    // Lobby → Playing: countdown splash
     if (state.status === 'playing' && prev.status === 'lobby') {
       showGameStartSplash();
     }
 
-    // Word accepted — play accept SFX + animate
     const prevWord = prev.game?.currentWord;
     const newWord  = state.game?.currentWord;
     if (newWord && newWord !== prevWord && prevCurrentWord !== undefined) {
@@ -531,13 +469,12 @@ function handleRoomState(state) {
     }
     prevCurrentWord = newWord ?? null;
 
-    // New pending word for host
     const prevPend = prev.game?.pendingWord;
     const newPend  = state.game?.pendingWord;
     if (newPend && newPend !== prevPend) {
       if (myRole === 'host') {
         sfxPending();
-        vibrate([80, 55, 80]);
+        vibrate([60, 50, 60]);
         requestAnimationFrame(() => {
           const panel = document.getElementById('host-approval-panel');
           if (panel && !panel.classList.contains('hidden')) animatePop(panel);
@@ -580,7 +517,6 @@ function handleRoomState(state) {
   }
 }
 
-// ── Screen switching ──────────────────────────────────────────────────────────
 const ALL_SCREENS = [
   'landing','host-lobby','player-lobby',
   'host-game','player-game','eliminated','winner',
@@ -594,14 +530,13 @@ function showScreen(name) {
   });
 }
 
-// ── Render: host lobby ────────────────────────────────────────────────────────
 function renderHostLobby(state) {
   document.getElementById('host-room-code').textContent   = state.code;
   document.getElementById('host-lobby-count').textContent = state.players.length;
   renderPlayerList('host-lobby-players', state.players, null, null, { canKick: true });
 
   const startBtn = document.getElementById('btn-start-game');
-  startBtn.textContent = (state.lastWinner ? '🔄 ' : '▶ ') + 'بدء اللعبة';
+  startBtn.textContent = (state.lastWinner ? '🔄 ' : '') + 'بدء اللعبة';
   const w = document.getElementById('input-first-word')?.value.trim();
   startBtn.disabled = !w || /\s/.test(w);
 
@@ -614,14 +549,13 @@ function renderHostLobby(state) {
   });
 }
 
-// ── Render: player lobby ──────────────────────────────────────────────────────
 function renderPlayerLobby(state) {
   document.getElementById('player-lobby-code').textContent  = state.code;
   document.getElementById('player-lobby-count').textContent = state.players.length;
   renderPlayerList('player-lobby-players', state.players, null, myPlayerId);
 }
 
-// ── Render: player game ───────────────────────────────────────────────────────
+// Simplified player game render — no sidebar, no word list, no full player list
 function renderPlayerGame(state) {
   const game = state.game;
   if (!game) return;
@@ -634,17 +568,17 @@ function renderPlayerGame(state) {
   const banner = document.getElementById('turn-status');
   if (isPending && isMeTurn) {
     banner.className = 'turn-status turn-pending';
-    banner.textContent = '⏳ في انتظار قرار الحكم...';
+    banner.textContent = 'في انتظار قرار الحكم';
   } else if (isMeTurn) {
     banner.className = 'turn-status turn-active';
-    banner.textContent = '🎯 دورك الآن!';
+    banner.textContent = 'دورك الآن';
   } else {
     banner.className = 'turn-status turn-waiting';
     const tp = state.players.find(p => p.id === game.currentTurnPlayerId);
-    banner.textContent = `⏳ في انتظار: ${tp?.name || '...'}`;
+    banner.textContent = `دور: ${tp?.name || '...'}`;
   }
 
-  document.getElementById('player-current-word').textContent   = game.currentWord || '—';
+  document.getElementById('player-current-word').textContent    = game.currentWord || '—';
   document.getElementById('player-required-letter').textContent = game.requiredLetter || '—';
 
   const input = document.getElementById('player-word-input');
@@ -654,12 +588,8 @@ function renderPlayerGame(state) {
   document.querySelector('.submit-area')?.classList.toggle('my-turn', canSubmit);
 
   document.getElementById('pending-notice').classList.toggle('hidden', !(isPending && isMeTurn));
-
-  renderPlayerList('player-game-players', state.players, game.currentTurnPlayerId, myPlayerId);
-  renderWordsList('player-used-words', 'player-words-count', game.usedWords, game.requiredLetter);
 }
 
-// ── Render: host game ─────────────────────────────────────────────────────────
 function renderHostGame(state) {
   const game   = state.game;
   const status = state.status;
@@ -721,24 +651,19 @@ function renderHostGame(state) {
   renderEvents(game.events);
 }
 
-// ── Render: eliminated ───────────────────────────────────────────────────────
 function renderEliminated(state) {
   const game = state.game;
-  document.getElementById('elim-reason').textContent         = myElimReason || '';
-  document.getElementById('elim-current-word').textContent   = game?.currentWord || '—';
+  document.getElementById('elim-reason').textContent          = myElimReason || '';
+  document.getElementById('elim-current-word').textContent    = game?.currentWord || '—';
   document.getElementById('elim-required-letter').textContent = game?.requiredLetter || '—';
-  renderPlayerList('elim-players', state.players.filter(p => p.alive), game?.currentTurnPlayerId, null);
-  renderWordsList('elim-used-words', 'elim-words-count', game?.usedWords || [], game?.requiredLetter);
 }
 
-// ── Render: winner ────────────────────────────────────────────────────────────
 function renderWinner(state, isHost) {
   const w = state.lastWinner;
   document.getElementById('winner-name').textContent = w?.name || 'لا يوجد فائز';
   document.getElementById('btn-winner-new-game').classList.toggle('hidden', !isHost);
 }
 
-// ── Render: events ────────────────────────────────────────────────────────────
 function renderEvents(events) {
   const ul = document.getElementById('host-events-list');
   const ct = document.getElementById('host-events-count');
@@ -747,7 +672,7 @@ function renderEvents(events) {
   if (ct) ct.textContent = events.length;
 
   if (events.length === 0) {
-    ul.innerHTML = '<li class="events-empty">في انتظار الأحداث...</li>';
+    ul.innerHTML = '<li class="events-empty">في انتظار الأحداث</li>';
     lastSeenEventId = null;
     return;
   }
@@ -792,7 +717,6 @@ function formatEvent(ev) {
   }
 }
 
-// ── Render: player list ───────────────────────────────────────────────────────
 function renderPlayerList(listId, players, currentTurnId, selfId, opts = {}) {
   const ul = document.getElementById(listId);
   if (!ul) return;
@@ -839,7 +763,6 @@ function renderPlayerList(listId, players, currentTurnId, selfId, opts = {}) {
   }
 }
 
-// ── Render: words list ────────────────────────────────────────────────────────
 function renderWordsList(listId, countId, words, nextLetter) {
   const ul = document.getElementById(listId);
   const ct = document.getElementById(countId);
@@ -863,7 +786,6 @@ function renderWordsList(listId, countId, words, nextLetter) {
   });
 }
 
-// ── Paused overlay ────────────────────────────────────────────────────────────
 function updatePausedOverlay(state) {
   const game = state.game;
   if (state.status === 'paused' && game?.pausedReason) {
@@ -877,10 +799,10 @@ function showPausedOverlay(reason, playerName) {
   document.getElementById('overlay-paused').classList.remove('hidden');
   if (reason === 'host') {
     document.getElementById('overlay-title').textContent = 'اللعبة متوقفة';
-    document.getElementById('overlay-msg').textContent   = 'في انتظار عودة الحكم...';
+    document.getElementById('overlay-msg').textContent   = 'في انتظار عودة الحكم';
   } else if (reason === 'manual') {
     document.getElementById('overlay-title').textContent = 'استراحة قصيرة';
-    document.getElementById('overlay-msg').textContent   = 'الحكم أوقف المؤقت — انتظر لحظة';
+    document.getElementById('overlay-msg').textContent   = 'الحكم أوقف المؤقت';
   } else {
     document.getElementById('overlay-title').textContent = 'اللعبة متوقفة مؤقتاً';
     document.getElementById('overlay-msg').textContent   = `انقطع اتصال اللاعب: ${playerName || ''}`;
@@ -891,10 +813,9 @@ function hidePausedOverlay() {
   document.getElementById('overlay-paused').classList.add('hidden');
 }
 
-// ── Socket events ─────────────────────────────────────────────────────────────
 function handlePlayerEliminated(data) {
   const isMe = data.playerId === myPlayerId;
-  if (isMe) { sfxElimMe(); vibrate([200, 80, 200, 80, 200]); flashDanger(); flashElimScreen(); }
+  if (isMe) { sfxElimMe(); vibrate([180, 70, 180, 70, 180]); flashDanger(); flashElimScreen(); }
   else       { sfxElimOther(); }
   clearTension();
   if (isMe) {
@@ -909,7 +830,7 @@ function handleGameEnded(data) {
   sfxWin(iWon || myRole === 'host');
   if (iWon) vibrate([100, 50, 100, 50, 240]);
   clearTension();
-  if (iWon || myRole === 'host') spawnConfetti(iWon ? 120 : 75);
+  if (iWon || myRole === 'host') spawnConfetti(iWon ? 100 : 60);
   const input = document.getElementById('player-word-input');
   if (input) { input.value = ''; input.disabled = true; }
 }
@@ -917,7 +838,7 @@ function handleGameEnded(data) {
 function handleYourTurn(data) {
   if (data.playerId === myPlayerId) {
     sfxYourTurn();
-    vibrate([40, 40, 45]);
+    vibrate([35, 35, 40]);
     setTimeout(() => {
       const input = document.getElementById('player-word-input');
       if (input && !input.disabled) input.focus();
@@ -931,7 +852,7 @@ function handlePendingApproval() {
 
 function handleKickedFromRoom(data) {
   sfxKick();
-  vibrate([200, 80, 200]);
+  vibrate([180, 70, 180]);
   alert(data?.reason || 'طردك الحكم من الغرفة');
   clearSession();
   myRole = null; myPlayerId = null; myPlayerName = null;
@@ -940,7 +861,6 @@ function handleKickedFromRoom(data) {
   showScreen('landing');
 }
 
-// ── Timer loop ────────────────────────────────────────────────────────────────
 function startTimerLoop() { setInterval(updateTimers, 100); }
 
 function computeRemaining(game) {
@@ -962,16 +882,16 @@ function updateTimers() {
   const pct     = total > 0 ? rem / total : 0;
   const display = Math.ceil(rem);
 
-  const color = rem <= 2 ? '#ef4444'
-              : rem <= 4 ? '#f97316'
-              : rem <= 7 ? '#f59e0b'
-              : '#10b981';
+  // Calmer color palette for the timer
+  const color = rem <= 2 ? '#c97a7a'
+              : rem <= 4 ? '#d4a574'
+              : rem <= 7 ? '#d4b896'
+              : '#9ec1a3';
 
   const offset = RING_C * (1 - pct);
 
   if (game && display !== lastTimerSecond && display >= 0) {
     lastTimerSecond = display;
-    document.querySelectorAll('.timer-number').forEach(animateTimerTick);
   }
 
   for (const prefix of ['player', 'host']) {
@@ -983,16 +903,13 @@ function updateTimers() {
     }
     if (num) {
       num.textContent = game ? display : '—';
-      num.style.fontSize = rem <= 2 ? '2.8rem' : rem <= 4 ? '2.4rem' : '2.2rem';
-      num.style.color    = rem <= 5 ? color : '';
+      num.style.color = rem <= 5 ? color : '';
     }
   }
 
-  updateTimerGlow(rem <= 5 ? color : null);
   updateTension(game, rem);
 }
 
-// ── UI listeners ──────────────────────────────────────────────────────────────
 function setupUIListeners() {
 
   document.getElementById('btn-create').addEventListener('click', () => {
@@ -1098,7 +1015,6 @@ function resetClientState() {
   showScreen('landing');
 }
 
-// ── Start game ────────────────────────────────────────────────────────────────
 function startGame() {
   const input = document.getElementById('input-first-word');
   const errEl = document.getElementById('first-word-error');
@@ -1113,7 +1029,6 @@ function startGame() {
   });
 }
 
-// ── End-game modal ────────────────────────────────────────────────────────────
 function openEndGameModal() {
   if (!roomState) return;
   const ul = document.getElementById('end-game-winner-list');
@@ -1145,7 +1060,6 @@ function closeEndGameModal() {
   document.getElementById('end-game-modal').classList.add('hidden');
 }
 
-// ── Kick modal ────────────────────────────────────────────────────────────────
 function openKickModal(player) {
   pendingKickId = player.id;
   document.getElementById('kick-modal-msg').textContent =
@@ -1159,7 +1073,6 @@ function closeKickModal() {
   document.getElementById('kick-modal').classList.add('hidden');
 }
 
-// ── Sound toggle ──────────────────────────────────────────────────────────────
 function setupSoundToggle() {
   const btn = document.getElementById('btn-sound-toggle');
   if (!btn) return;
@@ -1177,7 +1090,6 @@ function setupSoundToggle() {
   });
 }
 
-// ── Join & submit ─────────────────────────────────────────────────────────────
 function joinRoom() {
   const code  = document.getElementById('input-room-code').value.trim().toUpperCase();
   const name  = document.getElementById('input-player-name').value.trim();
@@ -1224,7 +1136,6 @@ function submitWord() {
   });
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
 function showError(el, msg) {
   el.textContent = msg;
   el.classList.remove('hidden');

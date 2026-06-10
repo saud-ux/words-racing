@@ -28,7 +28,8 @@ const rooms = new Map();
 // ── Arabic letter rules ───────────────────────────────────────────────────────
 
 const stripDiacritics = s => s.replace(/[ً-ْٰـ]/g, '');
-const unifyHamza      = ch => ('أإآٱ'.includes(ch) ? 'ا' : ch);
+// ء now unified with ا — same as أإآٱ
+const unifyHamza      = ch => ('أإآٱء'.includes(ch) ? 'ا' : ch);
 
 function requiredNextLetter(word) {
   const w = stripDiacritics(word).trim();
@@ -101,6 +102,12 @@ function pubRoom(room) {
   const players = [...room.players.values()]
     .map(pubPlayer).sort((a, b) => a.joinIndex - b.joinIndex);
   const gs = room.gameState;
+
+  // While a word is pending, players see the LAST ACCEPTED word/letter, not the
+  // proposed one. Host gets the proposed word via the approval panel directly.
+  const displayWord   = gs?.pendingWord ? gs.lastAcceptedWord   : gs?.currentWord;
+  const displayLetter = gs?.pendingWord ? gs.lastAcceptedLetter : gs?.requiredLetter;
+
   return {
     code: room.code,
     status: room.status,
@@ -108,8 +115,8 @@ function pubRoom(room) {
     timerMode: room.timerMode,
     players,
     game: gs ? {
-      currentWord:         gs.currentWord,
-      requiredLetter:      gs.requiredLetter,
+      currentWord:         displayWord,
+      requiredLetter:      displayLetter,
       usedWords:           gs.usedWords,
       currentTurnPlayerId: gs.currentTurnPlayerId,
       timerSeconds:        gs.timerSeconds,
@@ -335,13 +342,11 @@ io.on('connection', socket => {
   });
 
   // ── startGame ────────────────────────────────────────────────────────────────
-  // Now requires `firstWord` from the host. Returns an error if missing/invalid.
   socket.on('startGame', ({ firstWord } = {}, cb) => {
     const room = rooms.get(socket.data.roomCode);
     if (!room || socket.data.role !== 'host') return;
     if (room.status !== 'lobby' && room.status !== 'ended') return;
 
-    // Validate firstWord
     const w = (firstWord || '').trim();
     if (!w)        return cb?.({ success: false, reason: 'اكتب الكلمة الأولى قبل البدء' });
     if (/\s/.test(w)) return cb?.({ success: false, reason: 'كلمة واحدة فقط بدون مسافات' });
@@ -360,6 +365,8 @@ io.on('connection', socket => {
     room.gameState = {
       currentWord: w,
       requiredLetter: nextLetter,
+      lastAcceptedWord: w,
+      lastAcceptedLetter: nextLetter,
       usedWords: [{ word: w, playerId: 'host', playerName: 'الحكم' }],
       usedWordKeys: new Set([repeatKey(w)]),
       currentTurnPlayerId: first.id,
@@ -420,6 +427,7 @@ io.on('connection', socket => {
       return cb?.({ success: false, reason: 'كلمة مكررة' });
     }
 
+    // Stash the proposed word; broadcast hides it from non-host players.
     gs.pendingWord     = w;
     gs.pendingPlayerId = playerId;
     broadcast(room);
@@ -451,8 +459,10 @@ io.on('connection', socket => {
       });
       gs.usedWords.push({ word, playerId: pid, playerName });
       gs.usedWordKeys.add(repeatKey(word));
-      gs.currentWord    = word;
-      gs.requiredLetter = nextLetter;
+      gs.currentWord        = word;
+      gs.requiredLetter     = nextLetter;
+      gs.lastAcceptedWord   = word;
+      gs.lastAcceptedLetter = nextLetter;
       advanceTurn(room);
     } else {
       pushEvent(room, {
