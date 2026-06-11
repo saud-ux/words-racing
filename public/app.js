@@ -456,6 +456,7 @@ function setupSocketListeners() {
   socket.on('yourTurn',         handleYourTurn);
   socket.on('pendingApproval',  handlePendingApproval);
   socket.on('kickedFromRoom',   handleKickedFromRoom);
+  socket.on('roomClosed',       handleRoomClosed);
 }
 
 function handleRoomState(state) {
@@ -889,6 +890,12 @@ function handleKickedFromRoom(data) {
   showScreen('landing');
 }
 
+function handleRoomClosed() {
+  if (myRole !== 'player') return;
+  alert('أنهى الهوست الغرفة');
+  resetClientState();
+}
+
 function startTimerLoop() { setInterval(updateTimers, 100); }
 
 function computeRemaining(game) {
@@ -1050,6 +1057,19 @@ function setupUIListeners() {
   document.getElementById('btn-leave-game').addEventListener('click', () => {
     if (!confirm('هل أنت متأكد أنك تريد مغادرة اللعبة؟')) return;
     socket.emit('leaveRoom', {}, () => resetClientState());
+  });
+
+  document.getElementById('btn-host-exit-lobby').addEventListener('click', () => {
+    socket.emit('closeRoom', {}, () => resetClientState());
+  });
+
+  document.getElementById('btn-host-exit-game').addEventListener('click', () => {
+    if (!confirm('هل أنت متأكد أنك تريد إنهاء الغرفة لجميع اللاعبين؟')) return;
+    socket.emit('closeRoom', {}, () => resetClientState());
+  });
+
+  document.getElementById('btn-host-exit-winner').addEventListener('click', () => {
+    socket.emit('closeRoom', {}, () => resetClientState());
   });
 }
 
