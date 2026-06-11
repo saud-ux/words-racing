@@ -307,7 +307,7 @@ function spawnConfetti(count = 90) {
   container.className = 'confetti-container';
   document.body.appendChild(container);
   // Palette-harmonious confetti: olive, cream, cognac, warm gold, sage, terracotta
-  const colors = ['#978F66','#E4D6A9','#995F2F','#C4A060','#7a9a6a','#C4702A','#f0e0b8','#b8a87a'];
+  const colors = ['#677D6A','#D6BD98','#40534C','#a8c4aa','#1A3636','#9a8a6a','#EDE8DF','#b0c4b0'];
   for (let i = 0; i < count; i++) {
     const p = document.createElement('div');
     p.className = 'confetti-particle';
@@ -481,6 +481,7 @@ function handleRoomState(state) {
 
   const prev = roomState;
   if (prev) {
+    // Only show splash when transitioning FROM lobby TO playing (new game start)
     if (state.status === 'playing' && prev.status === 'lobby') {
       showGameStartSplash();
     }
@@ -517,9 +518,16 @@ function handleRoomState(state) {
   roomState = state;
   const { status } = state;
 
-  if (status === 'playing' && isEliminated) {
-    const me = state.players.find(p => p.id === myPlayerId);
-    if (me && me.alive) { isEliminated = false; myElimReason = null; }
+  // ── FIX: clear eliminated flag when game resets ───────────────────────────
+  // 'lobby' = host navigated back for new round; 'ended' = game just finished
+  // and player is about to rejoin. 'playing' covers mid-game reconnect.
+  if (myRole === 'player' && isEliminated) {
+    if (status === 'lobby' || status === 'ended') {
+      isEliminated = false; myElimReason = null;
+    } else if (status === 'playing') {
+      const me = state.players.find(p => p.id === myPlayerId);
+      if (me && me.alive) { isEliminated = false; myElimReason = null; }
+    }
   }
 
   if (myRole === 'host') {
@@ -919,10 +927,10 @@ function updateTimers() {
 
   // ── Palette-matched timer colors ──────────────────────────────────────────
   // danger (cognac) → warning (warm gold) → mid (olive) → safe (sage)
-  const color = rem <= 2 ? '#C4702A'
-              : rem <= 4 ? '#C4A060'
-              : rem <= 7 ? '#978F66'
-              : '#7a9a6a';
+  const color = rem <= 2 ? '#a05a3a'
+              : rem <= 4 ? '#D6BD98'
+              : rem <= 7 ? '#677D6A'
+              : '#677D6A';
 
   const offset = RING_C * (1 - pct);
 
