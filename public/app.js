@@ -125,99 +125,81 @@ function noise(dur = 0.05, vol = 0.15, when = 0, filterFreq = 800) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// SOUND EFFECTS
+// SOUND EFFECTS — minimal, non-intrusive
 // ═══════════════════════════════════════════════════════════
 
+// Submit — light tap
 function sfxSubmit() {
-  tone(800,  { type: 'sine',     dur: 0.06, vol: 0.18, attack: 0.002, glideTo: 1200, release: 0.04 });
-  noise(0.04, 0.1, 0.04, 1200);
+  tone(900, { type: 'sine', dur: 0.05, vol: 0.12, attack: 0.002, release: 0.04 });
 }
 
+// Accept — two-note chime
 function sfxAccept() {
-  tone(523,  { type: 'triangle', dur: 0.12, vol: 0.28, attack: 0.004, decay: 0.04, sustain: 0.7, release: 0.08, when: 0    });
-  tone(659,  { type: 'triangle', dur: 0.14, vol: 0.28, attack: 0.004, decay: 0.04, sustain: 0.7, release: 0.1,  when: 0.08 });
-  tone(784,  { type: 'triangle', dur: 0.22, vol: 0.32, attack: 0.004, decay: 0.06, sustain: 0.8, release: 0.14, when: 0.16 });
-  tone(1568, { type: 'sine',     dur: 0.18, vol: 0.09, attack: 0.01,  release: 0.12, when: 0.18 });
+  tone(523, { type: 'triangle', dur: 0.1,  vol: 0.16, attack: 0.004, release: 0.08, when: 0   });
+  tone(784, { type: 'triangle', dur: 0.16, vol: 0.18, attack: 0.004, release: 0.12, when: 0.1 });
 }
 
+// Reject — short low buzz
 function sfxReject() {
-  tone(220, { type: 'sawtooth', dur: 0.28, vol: 0.35, attack: 0.003, decay: 0.05, sustain: 0.8, glideTo: 80,  release: 0.1 });
-  tone(180, { type: 'square',   dur: 0.22, vol: 0.18, attack: 0.003, glideTo: 60, release: 0.08, when: 0.02 });
-  noise(0.08, 0.18, 0, 300);
+  tone(180, { type: 'sawtooth', dur: 0.18, vol: 0.2, attack: 0.003, glideTo: 90, release: 0.08 });
 }
 
+// Your turn — two-ping
 function sfxYourTurn() {
-  tone(880,  { type: 'triangle', dur: 0.15, vol: 0.3,  attack: 0.005, decay: 0.05, sustain: 0.6, release: 0.12 });
-  tone(1320, { type: 'triangle', dur: 0.22, vol: 0.28, attack: 0.005, decay: 0.06, sustain: 0.6, release: 0.16, when: 0.1 });
+  tone(880,  { type: 'triangle', dur: 0.14, vol: 0.22, attack: 0.005, release: 0.12 });
+  tone(1320, { type: 'triangle', dur: 0.18, vol: 0.16, attack: 0.005, release: 0.14, when: 0.1 });
 }
 
-function sfxElimOther() {
-  tone(330, { type: 'sawtooth', dur: 0.45, vol: 0.22, attack: 0.004, glideTo: 80,  release: 0.12 });
-}
+// Elim other — silent (too disruptive)
+function sfxElimOther() {}
 
+// Elim me — short impact
 function sfxElimMe() {
-  tone(220, { type: 'sawtooth', dur: 0.6,  vol: 0.42, attack: 0.003, glideTo: 55,  release: 0.2 });
-  tone(160, { type: 'square',   dur: 0.5,  vol: 0.22, attack: 0.003, glideTo: 40,  release: 0.15, when: 0.05 });
-  noise(0.12, 0.3, 0, 200);
-  tone(60,  { type: 'sine',     dur: 0.3,  vol: 0.35, attack: 0.005, glideTo: 30,  release: 0.1,  when: 0.1 });
+  tone(160, { type: 'sawtooth', dur: 0.35, vol: 0.28, attack: 0.003, glideTo: 50, release: 0.15 });
+  noise(0.08, 0.18, 0, 250);
 }
 
+// Win
 function sfxWin(big) {
-  const base = [523.25, 659.25, 783.99, 1046.5];
+  const base = [523.25, 659.25, 783.99];
   base.forEach((f, i) => {
-    tone(f, { type: 'triangle', dur: 0.35, vol: big ? 0.36 : 0.22,
-              attack: 0.006, decay: 0.08, sustain: 0.7, release: 0.18,
-              when: i * 0.11 });
+    tone(f, { type: 'triangle', dur: 0.3, vol: big ? 0.24 : 0.16,
+              attack: 0.006, decay: 0.06, sustain: 0.7, release: 0.16, when: i * 0.1 });
   });
-  if (big) {
-    tone(1318.5, { type: 'triangle', dur: 0.55, vol: 0.32,
-                   attack: 0.006, release: 0.22, when: base.length * 0.11 });
-    [1047, 1319, 1568].forEach((f, i) =>
-      tone(f, { type: 'sine', dur: 0.4, vol: 0.1,
-                attack: 0.02, release: 0.2, when: base.length * 0.11 + i * 0.07 }));
-  }
+  if (big) tone(1046.5, { type: 'triangle', dur: 0.45, vol: 0.22, attack: 0.006, release: 0.2, when: 0.32 });
 }
 
+// Game start — short ascending sweep
 function sfxGameStart() {
-  tone(55,   { type: 'sine',     dur: 0.8,  vol: 0.18, attack: 0.1,  glideTo: 110, release: 0.2, when: 0 });
-  tone(392,  { type: 'triangle', dur: 0.22, vol: 0.3,  attack: 0.01, decay: 0.06, sustain: 0.7, release: 0.14, when: 0.35 });
-  tone(523,  { type: 'triangle', dur: 0.26, vol: 0.32, attack: 0.01, decay: 0.06, sustain: 0.7, release: 0.16, when: 0.52 });
-  tone(784,  { type: 'triangle', dur: 0.40, vol: 0.36, attack: 0.01, decay: 0.08, sustain: 0.8, release: 0.2,  when: 0.70 });
-  tone(1047, { type: 'triangle', dur: 0.55, vol: 0.34, attack: 0.01, release: 0.24, when: 0.92 });
-  tone(2093, { type: 'sine',     dur: 0.35, vol: 0.1,  attack: 0.02, release: 0.18, when: 1.0  });
+  tone(392,  { type: 'triangle', dur: 0.18, vol: 0.22, attack: 0.01, release: 0.12, when: 0.2  });
+  tone(523,  { type: 'triangle', dur: 0.22, vol: 0.24, attack: 0.01, release: 0.14, when: 0.38 });
+  tone(784,  { type: 'triangle', dur: 0.32, vol: 0.26, attack: 0.01, release: 0.18, when: 0.58 });
 }
 
+// Countdown blip — minimal
 function sfxCountdownBlip(step) {
-  const freqs = [660, 770, 880];
-  const f = freqs[Math.min(step, freqs.length - 1)] || 660;
-  tone(f,       { type: 'square',   dur: 0.06, vol: 0.24, attack: 0.002, release: 0.04 });
-  tone(f * 1.5, { type: 'sine',     dur: 0.06, vol: 0.09, attack: 0.002, release: 0.04 });
+  const f = [660, 770, 880][step] || 660;
+  tone(f, { type: 'square', dur: 0.05, vol: 0.16, attack: 0.002, release: 0.04 });
 }
 
+// Pending — single bell
 function sfxPending() {
-  tone(1047, { type: 'sine',     dur: 0.18, vol: 0.28, attack: 0.004, decay: 0.06, sustain: 0.5, release: 0.18 });
-  tone(784,  { type: 'sine',     dur: 0.22, vol: 0.22, attack: 0.004, release: 0.16, when: 0.16 });
-  tone(1047, { type: 'triangle', dur: 0.14, vol: 0.18, attack: 0.004, release: 0.12, when: 0.38 });
+  tone(1047, { type: 'sine', dur: 0.22, vol: 0.2, attack: 0.004, release: 0.2 });
 }
 
+// Tick — only fires when urgent (last 3s), very quiet
 function sfxTick(urgent, vol) {
-  if (urgent) {
-    tone(1320, { type: 'square', dur: 0.04, vol: vol * 1.2, attack: 0.001, release: 0.02 });
-    noise(0.025, vol * 0.3, 0, 2000);
-  } else {
-    tone(880,  { type: 'square', dur: 0.038, vol: vol * 0.85, attack: 0.001, release: 0.025 });
-  }
+  if (urgent) tone(1100, { type: 'square', dur: 0.03, vol: vol * 0.6, attack: 0.001, release: 0.02 });
 }
 
+// Heartbeat — quieter
 function sfxHeartbeat(vol) {
-  tone(65,  { type: 'sine', dur: 0.14, vol: vol * 1.1, attack: 0.008, glideTo: 55, release: 0.06 });
-  tone(50,  { type: 'sine', dur: 0.18, vol: vol * 0.9, attack: 0.008, glideTo: 40, release: 0.08, when: 0.14 });
-  noise(0.05, vol * 0.25, 0, 120);
+  tone(60, { type: 'sine', dur: 0.12, vol: vol * 0.45, attack: 0.008, glideTo: 50, release: 0.06 });
 }
 
+// Kick
 function sfxKick() {
-  tone(200, { type: 'sawtooth', dur: 0.2, vol: 0.3, attack: 0.003, glideTo: 50, release: 0.1 });
-  noise(0.06, 0.2, 0, 400);
+  tone(180, { type: 'sawtooth', dur: 0.16, vol: 0.2, attack: 0.003, glideTo: 50, release: 0.1 });
 }
 
 function flashDanger() {
@@ -307,7 +289,7 @@ function spawnConfetti(count = 90) {
   container.className = 'confetti-container';
   document.body.appendChild(container);
   // Palette-harmonious confetti: olive, cream, cognac, warm gold, sage, terracotta
-  const colors = ['#677D6A','#D6BD98','#40534C','#a8c4aa','#1A3636','#9a8a6a','#EDE8DF','#b0c4b0'];
+  const colors = ['#978F66','#E4D6A9','#995F2F','#C4A060','#7a9a6a','#C4702A','#f0e0b8','#b8a87a'];
   for (let i = 0; i < count; i++) {
     const p = document.createElement('div');
     p.className = 'confetti-particle';
@@ -478,6 +460,9 @@ function setupSocketListeners() {
 
 function handleRoomState(state) {
   if (!state) return;
+
+  // ── FIX: stamp the time we received this state for clock-skew-corrected timer
+  if (state.game) state.game._clientReceivedAt = Date.now();
 
   const prev = roomState;
   if (prev) {
@@ -908,6 +893,20 @@ function startTimerLoop() { setInterval(updateTimers, 100); }
 
 function computeRemaining(game) {
   if (!game) return 0;
+
+  // ── FIX: use server-computed remaining time to avoid clock skew ─────────────
+  // Server sends serverTimeRemaining (computed at broadcast time) + serverNow.
+  // We add the time elapsed since the server sent this snapshot.
+  if (game.serverTimeRemaining !== undefined && game.serverTimeRemaining !== null) {
+    if (game.pausedReason) return game.serverTimeRemaining;
+    if (game.pendingWord)  return game.serverTimeRemaining;
+    // Live countdown: subtract time elapsed since server snapshot
+    const clientReceivedAt = game._clientReceivedAt || Date.now();
+    const elapsed = (Date.now() - clientReceivedAt) / 1000;
+    return Math.max(0, game.serverTimeRemaining - elapsed);
+  }
+
+  // Fallback to local calculation if server fields missing
   if (game.pausedReason) return game.frozenTimeRemaining ?? game.timerSeconds;
   if (game.pendingWord) {
     if (game.timerStoppedAt && game.timerStartedAt)
@@ -927,10 +926,10 @@ function updateTimers() {
 
   // ── Palette-matched timer colors ──────────────────────────────────────────
   // danger (cognac) → warning (warm gold) → mid (olive) → safe (sage)
-  const color = rem <= 2 ? '#a05a3a'
-              : rem <= 4 ? '#D6BD98'
-              : rem <= 7 ? '#677D6A'
-              : '#677D6A';
+  const color = rem <= 2 ? '#C4702A'
+              : rem <= 4 ? '#C4A060'
+              : rem <= 7 ? '#978F66'
+              : '#7a9a6a';
 
   const offset = RING_C * (1 - pct);
 
