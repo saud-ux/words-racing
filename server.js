@@ -636,6 +636,15 @@ io.on('connection', socket => {
     cb?.({ success: true });
   });
 
+  socket.on('closeRoom', (_, cb) => {
+    const room = rooms.get(socket.data.roomCode);
+    if (!room || socket.data.role !== 'host') return cb?.({ success: false });
+    socket.to(room.code).emit('roomClosed');
+    io.in(room.code).socketsLeave(room.code);
+    rooms.delete(room.code);
+    cb?.({ success: true });
+  });
+
   socket.on('disconnect', () => {
     const room = rooms.get(socket.data.roomCode);
     if (!room) return;
