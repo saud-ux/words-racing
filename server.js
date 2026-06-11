@@ -26,7 +26,6 @@ app.use(express.static(path.join(__dirname, 'public')));
 const rooms = new Map();
 
 // ── Arabic letter rules ───────────────────────────────────────────────────────
-
 const stripDiacritics = s => s.replace(/[ً-ْٰـ]/g, '');
 const unifyHamza      = ch => ('أإآٱء'.includes(ch) ? 'ا' : ch);
 
@@ -52,7 +51,6 @@ function repeatKey(word) {
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
-
 function generateCode() {
   let code;
   do {
@@ -88,7 +86,6 @@ function pushEvent(room, event) {
 }
 
 // ── Public view builders ──────────────────────────────────────────────────────
-
 function pubPlayer(p) {
   return {
     id: p.id, name: p.name, alive: p.alive,
@@ -101,9 +98,32 @@ function pubRoom(room) {
   const players = [...room.players.values()]
     .map(pubPlayer).sort((a, b) => a.joinIndex - b.joinIndex);
   const gs = room.gameState;
+  const now = Date.now(); // ── FIX: snapshot server time for clock-skew correction
 
   const displayWord   = gs?.pendingWord ? gs.lastAcceptedWord   : gs?.currentWord;
   const displayLetter = gs?.pendingWord ? gs.lastAcceptedLetter : gs?.requiredLetter;
+
+  // ── FIX: compute remaining time on the server and send it directly ──────────
+  // Client uses this instead of re-computing from timerStartedAt, which is
+  // vulnerable to clock skew between server and client machines.
+  let computedRemaining = null;
+  if (gs) {
+    if (gs.pausedReason) {
+      computedRemaining = gs.frozenTimeRemaining ?? gs.timerSeconds;
+    } else if (gs.pendingWord) {
+      if (gs.timerStoppedAt && gs.timerStartedAt) {
+        computedRemaining = Math.max(0,
+          gs.timerSeconds - (gs.timerStoppedAt - gs.timerStartedAt) / 1000);
+      } else {
+        computedRemaining = gs.timerSeconds;
+      }
+    } else if (gs.timerStartedAt) {
+      computedRemaining = Math.max(0,
+        gs.timerSeconds - (now - gs.timerStartedAt) / 1000);
+    } else {
+      computedRemaining = gs.timerSeconds;
+    }
+  }
 
   return {
     code: room.code,
@@ -120,6 +140,9 @@ function pubRoom(room) {
       timerStartedAt:      gs.timerStartedAt,
       timerStoppedAt:      gs.timerStoppedAt,
       frozenTimeRemaining: gs.frozenTimeRemaining,
+      // ── FIX: send server-computed remaining + server timestamp ──────────────
+      serverTimeRemaining: computedRemaining,
+      serverNow:           now,
       pendingWord:         gs.pendingWord,
       pendingPlayerId:     gs.pendingPlayerId,
       pendingPlayerName:   gs.pendingPlayerId ? room.players.get(gs.pendingPlayerId)?.name : null,
@@ -137,7 +160,6 @@ function broadcast(room) {
 }
 
 // ── Game helpers ──────────────────────────────────────────────────────────────
-
 function aliveSorted(room) {
   return [...room.players.values()]
     .filter(p => p.alive)
@@ -161,27 +183,17 @@ function timeoutCurrent(room) {
   const gs = room.gameState;
   if (!gs || room.status !== 'playing' || gs.pendingWord) return;
   const pid = gs.currentTurnPlayerId;
-  pushEvent(room, {
-    type: 'timeout',
-    playerId: pid,
-    playerName: room.players.get(pid)?.name,
-  });
+  pushEvent(room, { type: 'timeout', playerId: pid, playerName: room.players.get(pid)?.name });
   doEliminate(room, pid, 'انتهى الوقت');
 }
 
 function doEliminate(room, playerId, reason) {
   const player = room.players.get(playerId);
   if (!player || !player.alive) return;
-  player.alive             = false;
-  player.eliminated        = true;
-  player.eliminationReason = reason;
+  player.alive = false; player.eliminated = true; player.eliminationReason = reason;
   const gs = room.gameState;
-  gs.pendingWord      = null;
-  gs.pendingPlayerId  = null;
-  gs.timerStoppedAt   = null;
-  io.to(room.code).emit('playerEliminated', {
-    playerId, playerName: player.name, reason,
-  });
+  gs.pendingWord = null; gs.pendingPlayerId = null; gs.timerStoppedAt = null;
+  io.to(room.code).emit('playerEliminated', { playerId, playerName: player.name, reason });
   const alive = aliveSorted(room);
   if (alive.length <= 1) { endGame(room, alive[0]); return; }
   if (gs.currentTurnPlayerId === playerId) advanceTurnFrom(room, player.joinIndex);
@@ -211,9 +223,9 @@ function advanceTurn(room) {
 }
 
 function pauseGame(room, reason, forPlayerId) {
-  const gs           = room.gameState;
-  room.status        = 'paused';
-  gs.pausedReason    = reason;
+  const gs = room.gameState;
+  room.status = 'paused';
+  gs.pausedReason = reason;
   gs.pausedForPlayerId = forPlayerId;
   clearTimeout(gs.timerHandle);
   gs.timerHandle = null;
@@ -223,12 +235,10 @@ function pauseGame(room, reason, forPlayerId) {
 }
 
 function resumeGame(room) {
-  const gs          = room.gameState;
-  const remaining   = gs.frozenTimeRemaining;
-  room.status       = 'playing';
-  gs.pausedReason   = null;
-  gs.pausedForPlayerId = null;
-  gs.frozenTimeRemaining = null;
+  const gs        = room.gameState;
+  const remaining = gs.frozenTimeRemaining;
+  room.status = 'playing';
+  gs.pausedReason = null; gs.pausedForPlayerId = null; gs.frozenTimeRemaining = null;
   gs.timerStartedAt = Date.now() - (gs.timerSeconds - (remaining ?? gs.timerSeconds)) * 1000;
   broadcast(room);
   io.to(room.code).emit('gameResumed', {});
@@ -242,23 +252,17 @@ function resumeGame(room) {
 function endGame(room, winner) {
   clearTimeout(room.gameState?.timerHandle);
   room.lastWinner = winner ? { id: winner.id, name: winner.name } : null;
-  room.status     = 'ended';
-  room.gameState  = null;
-  io.to(room.code).emit('gameEnded', {
-    winnerId: winner?.id, winnerName: winner?.name,
-  });
-  // ── FIX: broadcast the ended state so clients see status:'ended'
-  // This lets the host transition to lobby and players see the winner screen
+  room.status = 'ended';
+  room.gameState = null;
+  io.to(room.code).emit('gameEnded', { winnerId: winner?.id, winnerName: winner?.name });
   broadcast(room);
 }
 
 // ── Socket handlers ───────────────────────────────────────────────────────────
-
 io.on('connection', socket => {
 
-  // ── createRoom ──────────────────────────────────────────────────────────────
   socket.on('createRoom', cb => {
-    const code      = generateCode();
+    const code = generateCode();
     const hostToken = uid();
     rooms.set(code, {
       code, hostToken, hostSocketId: socket.id,
@@ -271,7 +275,6 @@ io.on('connection', socket => {
     cb?.({ success: true, code, hostToken });
   });
 
-  // ── reconnectHost ────────────────────────────────────────────────────────────
   socket.on('reconnectHost', ({ code, hostToken }, cb) => {
     const room = rooms.get(code);
     if (!room || room.hostToken !== hostToken) return cb?.({ success: false });
@@ -286,13 +289,11 @@ io.on('connection', socket => {
     cb?.({ success: true, roomState: pubRoom(room) });
   });
 
-  // ── joinRoom ─────────────────────────────────────────────────────────────────
   socket.on('joinRoom', ({ code, name, playerId, token }, cb) => {
     const upperCode = (code || '').toUpperCase();
     const room = rooms.get(upperCode);
     if (!room) return cb?.({ success: false, reason: 'الغرفة غير موجودة' });
 
-    // Reconnection attempt (existing player returning)
     if (playerId && token) {
       const p = room.players.get(playerId);
       if (p && p.token === token) {
@@ -312,10 +313,8 @@ io.on('connection', socket => {
       }
     }
 
-    // ── FIX: block only active games, allow joining lobby OR ended rooms ──────
     if (room.status === 'playing' || room.status === 'paused')
       return cb?.({ success: false, reason: 'اللعبة جارية بالفعل' });
-    // 'ended' is now treated the same as 'lobby' — players can join to get ready for next round
 
     if (room.players.size >= MAX_PLAYERS)
       return cb?.({ success: false, reason: 'الغرفة ممتلئة (20 لاعب)' });
@@ -340,7 +339,6 @@ io.on('connection', socket => {
     cb?.({ success: true, playerId: pid, token: tok, playerName: trimmedName, roomState: pubRoom(room) });
   });
 
-  // ── startGame ────────────────────────────────────────────────────────────────
   socket.on('startGame', ({ firstWord } = {}, cb) => {
     const room = rooms.get(socket.data.roomCode);
     if (!room || socket.data.role !== 'host') return;
@@ -350,12 +348,10 @@ io.on('connection', socket => {
     if (!w)        return cb?.({ success: false, reason: 'اكتب الكلمة الأولى قبل البدء' });
     if (/\s/.test(w)) return cb?.({ success: false, reason: 'كلمة واحدة فقط بدون مسافات' });
 
-    // ── FIX: reset all players (including ones who joined during 'ended') ─────
     for (const p of room.players.values()) {
       p.alive = true; p.eliminated = false; p.eliminationReason = null;
     }
 
-    // ── FIX: re-normalize joinIndex so turn order is clean each round ─────────
     let idx = 0;
     for (const p of [...room.players.values()].sort((a, b) => a.joinIndex - b.joinIndex)) {
       p.joinIndex = idx++;
@@ -371,10 +367,8 @@ io.on('connection', socket => {
 
     room.status    = 'playing';
     room.gameState = {
-      currentWord: w,
-      requiredLetter: nextLetter,
-      lastAcceptedWord: w,
-      lastAcceptedLetter: nextLetter,
+      currentWord: w, requiredLetter: nextLetter,
+      lastAcceptedWord: w, lastAcceptedLetter: nextLetter,
       usedWords: [{ word: w, playerId: 'host', playerName: 'الحكم' }],
       usedWordKeys: new Set([repeatKey(w)]),
       currentTurnPlayerId: first.id,
@@ -386,19 +380,13 @@ io.on('connection', socket => {
       tierLabel: fixedTimer ? `${room.timerMode} ثانية (ثابت)` : tierLabel(alive.length),
       events: [],
     };
-    pushEvent(room, {
-      type: 'gameStarted',
-      count: alive.length,
-      firstWord: w,
-      firstPlayerName: first.name,
-    });
+    pushEvent(room, { type: 'gameStarted', count: alive.length, firstWord: w, firstPlayerName: first.name });
     startTimer(room);
     broadcast(room);
     io.to(room.code).emit('yourTurn', { playerId: first.id });
     cb?.({ success: true });
   });
 
-  // ── submitWord ───────────────────────────────────────────────────────────────
   socket.on('submitWord', ({ word }, cb) => {
     const room = rooms.get(socket.data.roomCode);
     if (!room || !room.gameState || room.status !== 'playing') return;
@@ -410,43 +398,33 @@ io.on('connection', socket => {
     if (!w || /\s/.test(w)) return cb?.({ success: false });
 
     clearTimeout(gs.timerHandle);
-    gs.timerHandle    = null;
+    gs.timerHandle = null;
     gs.timerStoppedAt = Date.now();
 
     const playerName = room.players.get(playerId)?.name;
 
     if (gs.requiredLetter !== null) {
       if (!startsCorrectly(w, gs.requiredLetter)) {
-        pushEvent(room, {
-          type: 'wrongLetter',
-          playerId, playerName, word: w,
-          expectedLetter: gs.requiredLetter,
-        });
+        pushEvent(room, { type: 'wrongLetter', playerId, playerName, word: w, expectedLetter: gs.requiredLetter });
         doEliminate(room, playerId, 'حرف خاطئ');
         return cb?.({ success: false, reason: 'حرف خاطئ' });
       }
     }
     if (gs.usedWordKeys.has(repeatKey(w))) {
-      pushEvent(room, {
-        type: 'repeatedWord',
-        playerId, playerName, word: w,
-      });
+      pushEvent(room, { type: 'repeatedWord', playerId, playerName, word: w });
       doEliminate(room, playerId, 'كلمة مكررة');
       return cb?.({ success: false, reason: 'كلمة مكررة' });
     }
 
-    gs.pendingWord     = w;
+    gs.pendingWord = w;
     gs.pendingPlayerId = playerId;
     broadcast(room);
     if (room.hostSocketId) {
-      io.to(room.hostSocketId).emit('pendingApproval', {
-        word: w, playerId, playerName,
-      });
+      io.to(room.hostSocketId).emit('pendingApproval', { word: w, playerId, playerName });
     }
     cb?.({ success: true, pending: true });
   });
 
-  // ── judgeDecision ────────────────────────────────────────────────────────────
   socket.on('judgeDecision', ({ accept }, cb) => {
     const room = rooms.get(socket.data.roomCode);
     if (!room || !room.gameState || socket.data.role !== 'host') return;
@@ -460,28 +438,19 @@ io.on('connection', socket => {
 
     if (accept) {
       const nextLetter = requiredNextLetter(word);
-      pushEvent(room, {
-        type: 'wordAccepted',
-        playerId: pid, playerName, word, nextLetter,
-      });
+      pushEvent(room, { type: 'wordAccepted', playerId: pid, playerName, word, nextLetter });
       gs.usedWords.push({ word, playerId: pid, playerName });
       gs.usedWordKeys.add(repeatKey(word));
-      gs.currentWord        = word;
-      gs.requiredLetter     = nextLetter;
-      gs.lastAcceptedWord   = word;
-      gs.lastAcceptedLetter = nextLetter;
+      gs.currentWord = word; gs.requiredLetter = nextLetter;
+      gs.lastAcceptedWord = word; gs.lastAcceptedLetter = nextLetter;
       advanceTurn(room);
     } else {
-      pushEvent(room, {
-        type: 'wordRejected',
-        playerId: pid, playerName, word,
-      });
+      pushEvent(room, { type: 'wordRejected', playerId: pid, playerName, word });
       doEliminate(room, pid, 'رفضها الحكم');
     }
     cb?.({ success: true });
   });
 
-  // ── hostDropPlayer ───────────────────────────────────────────────────────────
   socket.on('hostDropPlayer', ({ playerId }, cb) => {
     const room = rooms.get(socket.data.roomCode);
     if (!room || !room.gameState || socket.data.role !== 'host') return;
@@ -493,9 +462,7 @@ io.on('connection', socket => {
     pushEvent(room, { type: 'dropped', playerId, playerName: player.name });
     player.alive = false; player.eliminated = true; player.eliminationReason = 'انسحب';
     room.gameState.pendingWord = null; room.gameState.pendingPlayerId = null;
-    io.to(room.code).emit('playerEliminated', {
-      playerId, playerName: player.name, reason: 'انسحب',
-    });
+    io.to(room.code).emit('playerEliminated', { playerId, playerName: player.name, reason: 'انسحب' });
 
     const alive = aliveSorted(room);
     if (alive.length <= 1) { endGame(room, alive[0]); return cb?.({ success: true }); }
@@ -506,10 +473,9 @@ io.on('connection', socket => {
     }
 
     room.status = 'playing';
-    room.gameState.pausedReason    = null;
-    room.gameState.pausedForPlayerId = null;
+    room.gameState.pausedReason = null; room.gameState.pausedForPlayerId = null;
     room.gameState.frozenTimeRemaining = null;
-    room.gameState.timerStartedAt  = Date.now();
+    room.gameState.timerStartedAt = Date.now();
     broadcast(room);
     io.to(room.code).emit('gameResumed', {});
     startTimer(room);
@@ -517,7 +483,6 @@ io.on('connection', socket => {
     cb?.({ success: true });
   });
 
-  // ── hostKickPlayer ───────────────────────────────────────────────────────────
   socket.on('hostKickPlayer', ({ playerId }, cb) => {
     const room = rooms.get(socket.data.roomCode);
     if (!room || socket.data.role !== 'host') return cb?.({ success: false });
@@ -528,9 +493,7 @@ io.on('connection', socket => {
 
     if (room.status === 'lobby' || room.status === 'ended') {
       room.players.delete(playerId);
-      if (kickedSocketId) {
-        io.to(kickedSocketId).emit('kickedFromRoom', { reason: 'طردك الحكم' });
-      }
+      if (kickedSocketId) io.to(kickedSocketId).emit('kickedFromRoom', { reason: 'طردك الحكم' });
       broadcast(room);
       return cb?.({ success: true });
     }
@@ -541,45 +504,32 @@ io.on('connection', socket => {
 
     const wasTurn = gs.currentTurnPlayerId === playerId;
     pushEvent(room, { type: 'kicked', playerId, playerName: player.name });
-
-    player.alive = false;
-    player.eliminated = true;
-    player.eliminationReason = 'طُرد من الحكم';
+    player.alive = false; player.eliminated = true; player.eliminationReason = 'طُرد من الحكم';
 
     if (gs.pendingPlayerId === playerId) {
-      gs.pendingWord = null;
-      gs.pendingPlayerId = null;
-      gs.timerStoppedAt = null;
+      gs.pendingWord = null; gs.pendingPlayerId = null; gs.timerStoppedAt = null;
     }
 
-    io.to(room.code).emit('playerEliminated', {
-      playerId, playerName: player.name, reason: 'طُرد من الحكم',
-    });
+    io.to(room.code).emit('playerEliminated', { playerId, playerName: player.name, reason: 'طُرد من الحكم' });
 
     const alive = aliveSorted(room);
     if (alive.length <= 1) { endGame(room, alive[0]); return cb?.({ success: true }); }
 
-    const wasPausedForKicked =
-      room.status === 'paused' && gs.pausedForPlayerId === playerId;
-
+    const wasPausedForKicked = room.status === 'paused' && gs.pausedForPlayerId === playerId;
     if (wasTurn) {
       const next = alive.find(p => p.joinIndex > player.joinIndex) || alive[0];
       gs.currentTurnPlayerId = next.id;
     }
 
     if (wasPausedForKicked) {
-      room.status = 'playing';
-      gs.pausedReason = null;
-      gs.pausedForPlayerId = null;
-      gs.frozenTimeRemaining = null;
-      gs.timerStartedAt = Date.now();
+      room.status = 'playing'; gs.pausedReason = null; gs.pausedForPlayerId = null;
+      gs.frozenTimeRemaining = null; gs.timerStartedAt = Date.now();
       broadcast(room);
       io.to(room.code).emit('gameResumed', {});
       startTimer(room);
       io.to(room.code).emit('yourTurn', { playerId: gs.currentTurnPlayerId });
     } else if (room.status === 'playing' && wasTurn) {
-      broadcast(room);
-      startTimer(room);
+      broadcast(room); startTimer(room);
       io.to(room.code).emit('yourTurn', { playerId: gs.currentTurnPlayerId });
     } else {
       broadcast(room);
@@ -587,7 +537,6 @@ io.on('connection', socket => {
     cb?.({ success: true });
   });
 
-  // ── hostPauseTimer ───────────────────────────────────────────────────────────
   socket.on('hostPauseTimer', cb => {
     const room = rooms.get(socket.data.roomCode);
     if (!room || socket.data.role !== 'host') return cb?.({ success: false });
@@ -597,7 +546,6 @@ io.on('connection', socket => {
     cb?.({ success: true });
   });
 
-  // ── hostResumeTimer ──────────────────────────────────────────────────────────
   socket.on('hostResumeTimer', cb => {
     const room = rooms.get(socket.data.roomCode);
     if (!room || socket.data.role !== 'host') return cb?.({ success: false });
@@ -611,12 +559,10 @@ io.on('connection', socket => {
       broadcast(room);
       return cb?.({ success: true, switchedToPlayerPause: true });
     }
-
     resumeGame(room);
     cb?.({ success: true });
   });
 
-  // ── hostAdjustTimer ──────────────────────────────────────────────────────────
   socket.on('hostAdjustTimer', ({ delta }, cb) => {
     const room = rooms.get(socket.data.roomCode);
     if (!room || socket.data.role !== 'host') return cb?.({ success: false });
@@ -630,29 +576,23 @@ io.on('connection', socket => {
     let newRem = currentRem + delta;
 
     if (newRem <= 0) {
-      clearTimeout(gs.timerHandle);
-      gs.timerHandle = null;
+      clearTimeout(gs.timerHandle); gs.timerHandle = null;
       timeoutCurrent(room);
       return cb?.({ success: true, triggeredTimeout: true });
     }
-
     if (newRem > MAX_TIMER_SECS) newRem = MAX_TIMER_SECS;
-
     gs.timerSeconds = newRem;
     gs.timerStartedAt = Date.now();
-
     clearTimeout(gs.timerHandle);
     gs.timerHandle = setTimeout(() => timeoutCurrent(room), newRem * 1000);
     broadcast(room);
     cb?.({ success: true, newRemaining: newRem });
   });
 
-  // ── hostEndGame ──────────────────────────────────────────────────────────────
   socket.on('hostEndGame', ({ winnerId }, cb) => {
     const room = rooms.get(socket.data.roomCode);
     if (!room || socket.data.role !== 'host') return cb?.({ success: false });
-    if (room.status !== 'playing' && room.status !== 'paused')
-      return cb?.({ success: false });
+    if (room.status !== 'playing' && room.status !== 'paused') return cb?.({ success: false });
 
     let winner = null;
     if (winnerId) {
@@ -664,7 +604,6 @@ io.on('connection', socket => {
     cb?.({ success: true });
   });
 
-  // ── setTimerMode ─────────────────────────────────────────────────────────────
   socket.on('setTimerMode', ({ mode }, cb) => {
     const room = rooms.get(socket.data.roomCode);
     if (!room || socket.data.role !== 'host') return cb?.({ success: false });
@@ -676,7 +615,6 @@ io.on('connection', socket => {
     cb?.({ success: true });
   });
 
-  // ── leaveRoom ────────────────────────────────────────────────────────────────
   socket.on('leaveRoom', (_, cb) => {
     const room = rooms.get(socket.data.roomCode);
     if (!room || socket.data.role !== 'player') return cb?.({ success: false });
@@ -698,7 +636,6 @@ io.on('connection', socket => {
     cb?.({ success: true });
   });
 
-  // ── disconnect ───────────────────────────────────────────────────────────────
   socket.on('disconnect', () => {
     const room = rooms.get(socket.data.roomCode);
     if (!room) return;
@@ -708,11 +645,8 @@ io.on('connection', socket => {
       const p = room.players.get(socket.data.playerId);
       if (p) {
         p.socketId = null;
-        if (room.status === 'playing' && p.alive) {
-          pauseGame(room, 'player', p.id);
-        } else {
-          broadcast(room);
-        }
+        if (room.status === 'playing' && p.alive) pauseGame(room, 'player', p.id);
+        else broadcast(room);
       }
     }
   });
@@ -720,6 +654,4 @@ io.on('connection', socket => {
 
 // ── Start server ──────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () =>
-  console.log(`سباق الكلمات — http://localhost:${PORT}`)
-);
+server.listen(PORT, () => console.log(`سباق الكلمات — http://localhost:${PORT}`));
