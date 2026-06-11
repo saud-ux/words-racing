@@ -28,7 +28,6 @@ const rooms = new Map();
 // ── Arabic letter rules ───────────────────────────────────────────────────────
 
 const stripDiacritics = s => s.replace(/[ً-ْٰـ]/g, '');
-// ء now unified with ا — same as أإآٱ
 const unifyHamza      = ch => ('أإآٱء'.includes(ch) ? 'ا' : ch);
 
 function requiredNextLetter(word) {
@@ -103,8 +102,6 @@ function pubRoom(room) {
     .map(pubPlayer).sort((a, b) => a.joinIndex - b.joinIndex);
   const gs = room.gameState;
 
-  // While a word is pending, players see the LAST ACCEPTED word/letter, not the
-  // proposed one. Host gets the proposed word via the approval panel directly.
   const displayWord   = gs?.pendingWord ? gs.lastAcceptedWord   : gs?.currentWord;
   const displayLetter = gs?.pendingWord ? gs.lastAcceptedLetter : gs?.requiredLetter;
 
@@ -250,6 +247,8 @@ function endGame(room, winner) {
   io.to(room.code).emit('gameEnded', {
     winnerId: winner?.id, winnerName: winner?.name,
   });
+  // ── FIX: broadcast the ended state so clients see status:'ended'
+  // This lets the host transition to lobby and players see the winner screen
   broadcast(room);
 }
 
@@ -293,7 +292,7 @@ io.on('connection', socket => {
     const room = rooms.get(upperCode);
     if (!room) return cb?.({ success: false, reason: 'الغرفة غير موجودة' });
 
-    // Reconnection
+    // Reconnection attempt (existing player returning)
     if (playerId && token) {
       const p = room.players.get(playerId);
       if (p && p.token === token) {
@@ -313,11 +312,11 @@ io.on('connection', socket => {
       }
     }
 
-    // New join validation
+    // ── FIX: block only active games, allow joining lobby OR ended rooms ──────
     if (room.status === 'playing' || room.status === 'paused')
       return cb?.({ success: false, reason: 'اللعبة جارية بالفعل' });
-    if (room.status === 'ended')
-      return cb?.({ success: false, reason: 'انتهت اللعبة — انتظر لعبة جديدة' });
+    // 'ended' is now treated the same as 'lobby' — players can join to get ready for next round
+
     if (room.players.size >= MAX_PLAYERS)
       return cb?.({ success: false, reason: 'الغرفة ممتلئة (20 لاعب)' });
 
@@ -351,9 +350,18 @@ io.on('connection', socket => {
     if (!w)        return cb?.({ success: false, reason: 'اكتب الكلمة الأولى قبل البدء' });
     if (/\s/.test(w)) return cb?.({ success: false, reason: 'كلمة واحدة فقط بدون مسافات' });
 
+    // ── FIX: reset all players (including ones who joined during 'ended') ─────
     for (const p of room.players.values()) {
       p.alive = true; p.eliminated = false; p.eliminationReason = null;
     }
+
+    // ── FIX: re-normalize joinIndex so turn order is clean each round ─────────
+    let idx = 0;
+    for (const p of [...room.players.values()].sort((a, b) => a.joinIndex - b.joinIndex)) {
+      p.joinIndex = idx++;
+    }
+    room.joinCounter = room.players.size;
+
     const alive = aliveSorted(room);
     if (alive.length === 0) return cb?.({ success: false, reason: 'لا يوجد لاعبون' });
 
@@ -427,7 +435,6 @@ io.on('connection', socket => {
       return cb?.({ success: false, reason: 'كلمة مكررة' });
     }
 
-    // Stash the proposed word; broadcast hides it from non-host players.
     gs.pendingWord     = w;
     gs.pendingPlayerId = playerId;
     broadcast(room);
