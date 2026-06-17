@@ -205,8 +205,10 @@ function advanceTurnFrom(room, fromJoinIndex) {
   const alive = aliveSorted(room);
   const next  = alive.find(p => p.joinIndex > fromJoinIndex) || alive[0];
   gs.currentTurnPlayerId = next.id;
-  broadcast(room);
+  // ── FIX: start the fresh timer BEFORE broadcasting, so serverTimeRemaining
+  // reflects the new turn's full duration — not the previous player's leftover.
   startTimer(room);
+  broadcast(room);
   io.to(room.code).emit('yourTurn', { playerId: next.id });
 }
 
@@ -217,8 +219,10 @@ function advanceTurn(room) {
   const idx  = alive.findIndex(p => p.id === gs.currentTurnPlayerId);
   const next = alive[(idx + 1) % alive.length];
   gs.currentTurnPlayerId = next.id;
-  broadcast(room);
+  // ── FIX: start the fresh timer BEFORE broadcasting, so serverTimeRemaining
+  // reflects the new turn's full duration — not the previous player's leftover.
   startTimer(room);
+  broadcast(room);
   io.to(room.code).emit('yourTurn', { playerId: next.id });
 }
 
@@ -475,10 +479,11 @@ io.on('connection', socket => {
     room.status = 'playing';
     room.gameState.pausedReason = null; room.gameState.pausedForPlayerId = null;
     room.gameState.frozenTimeRemaining = null;
-    room.gameState.timerStartedAt = Date.now();
+    // ── FIX: start the fresh timer BEFORE broadcasting (startTimer also sets
+    // timerStartedAt), so the broadcast carries the new turn's full duration.
+    startTimer(room);
     broadcast(room);
     io.to(room.code).emit('gameResumed', {});
-    startTimer(room);
     io.to(room.code).emit('yourTurn', { playerId: room.gameState.currentTurnPlayerId });
     cb?.({ success: true });
   });
@@ -523,13 +528,16 @@ io.on('connection', socket => {
 
     if (wasPausedForKicked) {
       room.status = 'playing'; gs.pausedReason = null; gs.pausedForPlayerId = null;
-      gs.frozenTimeRemaining = null; gs.timerStartedAt = Date.now();
+      gs.frozenTimeRemaining = null;
+      // ── FIX: start fresh timer BEFORE broadcasting (also sets timerStartedAt).
+      startTimer(room);
       broadcast(room);
       io.to(room.code).emit('gameResumed', {});
-      startTimer(room);
       io.to(room.code).emit('yourTurn', { playerId: gs.currentTurnPlayerId });
     } else if (room.status === 'playing' && wasTurn) {
-      broadcast(room); startTimer(room);
+      // ── FIX: start fresh timer BEFORE broadcasting.
+      startTimer(room);
+      broadcast(room);
       io.to(room.code).emit('yourTurn', { playerId: gs.currentTurnPlayerId });
     } else {
       broadcast(room);
