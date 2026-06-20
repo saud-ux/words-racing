@@ -125,81 +125,71 @@ function noise(dur = 0.05, vol = 0.15, when = 0, filterFreq = 800) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// SOUND EFFECTS — minimal, non-intrusive
+// SOUND EFFECTS — خففناها كلها، وشيلنا heartbeat وtick من الـ loop
 // ═══════════════════════════════════════════════════════════
 
-// Submit — light tap
+// Submit — نقرة خفيفة جداً
 function sfxSubmit() {
-  tone(900, { type: 'sine', dur: 0.05, vol: 0.12, attack: 0.002, release: 0.04 });
+  tone(800, { type: 'sine', dur: 0.04, vol: 0.06, attack: 0.002, release: 0.03 });
 }
 
-// Accept — two-note chime
+// Accept — نغمة واحدة بسيطة
 function sfxAccept() {
-  tone(523, { type: 'triangle', dur: 0.1,  vol: 0.16, attack: 0.004, release: 0.08, when: 0   });
-  tone(784, { type: 'triangle', dur: 0.16, vol: 0.18, attack: 0.004, release: 0.12, when: 0.1 });
+  tone(600, { type: 'triangle', dur: 0.08, vol: 0.08, attack: 0.003, release: 0.07 });
 }
 
-// Reject — short low buzz
+// Reject — buzz قصير هادئ
 function sfxReject() {
-  tone(180, { type: 'sawtooth', dur: 0.18, vol: 0.2, attack: 0.003, glideTo: 90, release: 0.08 });
+  tone(160, { type: 'sawtooth', dur: 0.12, vol: 0.09, attack: 0.003, glideTo: 80, release: 0.06 });
 }
 
-// Your turn — two-ping
+// Your turn — ping واحد هادئ
 function sfxYourTurn() {
-  tone(880,  { type: 'triangle', dur: 0.14, vol: 0.22, attack: 0.005, release: 0.12 });
-  tone(1320, { type: 'triangle', dur: 0.18, vol: 0.16, attack: 0.005, release: 0.14, when: 0.1 });
+  tone(780, { type: 'triangle', dur: 0.1, vol: 0.11, attack: 0.004, release: 0.09 });
 }
 
-// Elim other — silent (too disruptive)
+// Elim other — صامت
 function sfxElimOther() {}
 
-// Elim me — short impact
+// Elim me — تأثير قصير خفيف
 function sfxElimMe() {
-  tone(160, { type: 'sawtooth', dur: 0.35, vol: 0.28, attack: 0.003, glideTo: 50, release: 0.15 });
-  noise(0.08, 0.18, 0, 250);
+  tone(140, { type: 'sawtooth', dur: 0.2, vol: 0.13, attack: 0.003, glideTo: 50, release: 0.1 });
 }
 
-// Win
+// Win — ثلاث نغمات هادئة
 function sfxWin(big) {
-  const base = [523.25, 659.25, 783.99];
-  base.forEach((f, i) => {
-    tone(f, { type: 'triangle', dur: 0.3, vol: big ? 0.24 : 0.16,
-              attack: 0.006, decay: 0.06, sustain: 0.7, release: 0.16, when: i * 0.1 });
-  });
-  if (big) tone(1046.5, { type: 'triangle', dur: 0.45, vol: 0.22, attack: 0.006, release: 0.2, when: 0.32 });
+  tone(523, { type: 'triangle', dur: 0.18, vol: 0.1,  attack: 0.005, release: 0.12, when: 0    });
+  tone(659, { type: 'triangle', dur: 0.18, vol: 0.11, attack: 0.005, release: 0.12, when: 0.12 });
+  tone(784, { type: 'triangle', dur: 0.22, vol: big ? 0.12 : 0.09, attack: 0.005, release: 0.15, when: 0.24 });
 }
 
-// Game start — short ascending sweep
+// Game start — sweep قصير هادئ
 function sfxGameStart() {
-  tone(392,  { type: 'triangle', dur: 0.18, vol: 0.22, attack: 0.01, release: 0.12, when: 0.2  });
-  tone(523,  { type: 'triangle', dur: 0.22, vol: 0.24, attack: 0.01, release: 0.14, when: 0.38 });
-  tone(784,  { type: 'triangle', dur: 0.32, vol: 0.26, attack: 0.01, release: 0.18, when: 0.58 });
+  tone(392, { type: 'triangle', dur: 0.12, vol: 0.09, attack: 0.008, release: 0.09, when: 0.1  });
+  tone(523, { type: 'triangle', dur: 0.14, vol: 0.10, attack: 0.008, release: 0.10, when: 0.22 });
+  tone(659, { type: 'triangle', dur: 0.18, vol: 0.11, attack: 0.008, release: 0.12, when: 0.36 });
 }
 
-// Countdown blip — minimal
+// Countdown blip — صوت بسيط جداً
 function sfxCountdownBlip(step) {
-  const f = [660, 770, 880][step] || 660;
-  tone(f, { type: 'square', dur: 0.05, vol: 0.16, attack: 0.002, release: 0.04 });
+  const f = [560, 640, 720][step] || 560;
+  tone(f, { type: 'sine', dur: 0.04, vol: 0.08, attack: 0.002, release: 0.03 });
 }
 
-// Pending — single bell
+// Pending — bell خفيف
 function sfxPending() {
-  tone(1047, { type: 'sine', dur: 0.22, vol: 0.2, attack: 0.004, release: 0.2 });
+  tone(900, { type: 'sine', dur: 0.14, vol: 0.09, attack: 0.003, release: 0.13 });
 }
 
-// Tick — only fires when urgent (last 3s), very quiet
-function sfxTick(urgent, vol) {
-  if (urgent) tone(1100, { type: 'square', dur: 0.03, vol: vol * 0.6, attack: 0.001, release: 0.02 });
-}
+// Tick — شيلناه، ما يصوت
+function sfxTick(urgent, vol) {}
 
-// Heartbeat — quieter
-function sfxHeartbeat(vol) {
-  tone(60, { type: 'sine', dur: 0.12, vol: vol * 0.45, attack: 0.008, glideTo: 50, release: 0.06 });
-}
+// Heartbeat — شيلناه، ما يصوت
+function sfxHeartbeat(vol) {}
 
 // Kick
 function sfxKick() {
-  tone(180, { type: 'sawtooth', dur: 0.16, vol: 0.2, attack: 0.003, glideTo: 50, release: 0.1 });
+  tone(160, { type: 'sawtooth', dur: 0.1, vol: 0.09, attack: 0.003, glideTo: 50, release: 0.07 });
 }
 
 function flashDanger() {
@@ -288,7 +278,6 @@ function spawnConfetti(count = 90) {
   const container = document.createElement('div');
   container.className = 'confetti-container';
   document.body.appendChild(container);
-  // Palette-harmonious confetti: olive, cream, cognac, warm gold, sage, terracotta
   const colors = ['#978F66','#E4D6A9','#995F2F','#C4A060','#7a9a6a','#C4702A','#f0e0b8','#b8a87a'];
   for (let i = 0; i < count; i++) {
     const p = document.createElement('div');
@@ -330,24 +319,9 @@ function updateTension(game, rem) {
 
   if (!liveTurn) { clearTension(); return; }
 
-  const isMyTurn  = myRole === 'player' && !isEliminated && game.currentTurnPlayerId === myPlayerId;
-  const intensity = isMyTurn ? 1 : 0.42;
-  const now       = performance.now();
+  const isMyTurn = myRole === 'player' && !isEliminated && game.currentTurnPlayerId === myPlayerId;
 
-  if (rem <= 6) {
-    if (now - lastTickAt >= tickIntervalMs(rem)) {
-      lastTickAt = now;
-      if (rem <= 3) {
-        sfxHeartbeat(0.48 * intensity);
-        if (isMyTurn) vibrate(55);
-      } else {
-        sfxTick(rem <= 4.5, 0.1 * intensity);
-      }
-    }
-  } else {
-    lastTickAt = 0;
-  }
-
+  // بس نبقي الـ visual tension (vignette + shake) — بدون أصوات متكررة
   const danger = rem <= 3;
   const v = document.getElementById('danger-vignette');
   if (v) {
@@ -356,6 +330,11 @@ function updateTension(game, rem) {
   }
   document.querySelectorAll('.timer-container')
     .forEach(el => el.classList.toggle('shake', danger && isMyTurn));
+
+  // vibrate بس للاعب اللي دوره، مرة وحدة لما يوصل لـ 3 ثواني
+  if (isMyTurn && danger && rem <= 3 && rem > 2.9) {
+    vibrate(60);
+  }
 }
 
 // ── Arabic letter helpers ─────────────────────────────────────────────────────
@@ -462,12 +441,10 @@ function setupSocketListeners() {
 function handleRoomState(state) {
   if (!state) return;
 
-  // ── FIX: stamp the time we received this state for clock-skew-corrected timer
   if (state.game) state.game._clientReceivedAt = Date.now();
 
   const prev = roomState;
   if (prev) {
-    // Only show splash when transitioning FROM lobby TO playing (new game start)
     if (state.status === 'playing' && prev.status === 'lobby') {
       showGameStartSplash();
     }
@@ -492,7 +469,7 @@ function handleRoomState(state) {
     if (newPend && newPend !== prevPend) {
       if (myRole === 'host') {
         sfxPending();
-        vibrate([80, 55, 80]);
+        vibrate([60, 40, 60]);
         requestAnimationFrame(() => {
           const panel = document.getElementById('host-approval-panel');
           if (panel && !panel.classList.contains('hidden')) animatePop(panel);
@@ -504,9 +481,6 @@ function handleRoomState(state) {
   roomState = state;
   const { status } = state;
 
-  // ── FIX: clear eliminated flag when game resets ───────────────────────────
-  // 'lobby' = host navigated back for new round; 'ended' = game just finished
-  // and player is about to rejoin. 'playing' covers mid-game reconnect.
   if (myRole === 'player' && isEliminated) {
     if (status === 'lobby' || status === 'ended') {
       isEliminated = false; myElimReason = null;
@@ -844,7 +818,7 @@ function hidePausedOverlay() {
 
 function handlePlayerEliminated(data) {
   const isMe = data.playerId === myPlayerId;
-  if (isMe) { sfxElimMe(); vibrate([200, 80, 200, 80, 200]); flashDanger(); flashElimScreen(); }
+  if (isMe) { sfxElimMe(); vibrate([150, 60, 150]); flashDanger(); flashElimScreen(); }
   else       { sfxElimOther(); }
   clearTension();
   if (isMe) {
@@ -857,7 +831,7 @@ function handlePlayerEliminated(data) {
 function handleGameEnded(data) {
   const iWon = data.winnerId && data.winnerId === myPlayerId;
   sfxWin(iWon || myRole === 'host');
-  if (iWon) vibrate([100, 50, 100, 50, 240]);
+  if (iWon) vibrate([80, 40, 80]);
   clearTension();
   if (iWon || myRole === 'host') spawnConfetti(iWon ? 120 : 75);
   const input = document.getElementById('player-word-input');
@@ -867,7 +841,7 @@ function handleGameEnded(data) {
 function handleYourTurn(data) {
   if (data.playerId === myPlayerId) {
     sfxYourTurn();
-    vibrate([40, 40, 45]);
+    vibrate([30, 30, 35]);
     setTimeout(() => {
       const input = document.getElementById('player-word-input');
       if (input && !input.disabled) input.focus();
@@ -881,7 +855,7 @@ function handlePendingApproval() {
 
 function handleKickedFromRoom(data) {
   sfxKick();
-  vibrate([200, 80, 200]);
+  vibrate([150, 60, 150]);
   alert(data?.reason || 'طردك الحكم من الغرفة');
   clearSession();
   myRole = null; myPlayerId = null; myPlayerName = null;
@@ -901,19 +875,14 @@ function startTimerLoop() { setInterval(updateTimers, 100); }
 function computeRemaining(game) {
   if (!game) return 0;
 
-  // ── FIX: use server-computed remaining time to avoid clock skew ─────────────
-  // Server sends serverTimeRemaining (computed at broadcast time) + serverNow.
-  // We add the time elapsed since the server sent this snapshot.
   if (game.serverTimeRemaining !== undefined && game.serverTimeRemaining !== null) {
     if (game.pausedReason) return game.serverTimeRemaining;
     if (game.pendingWord)  return game.serverTimeRemaining;
-    // Live countdown: subtract time elapsed since server snapshot
     const clientReceivedAt = game._clientReceivedAt || Date.now();
     const elapsed = (Date.now() - clientReceivedAt) / 1000;
     return Math.max(0, game.serverTimeRemaining - elapsed);
   }
 
-  // Fallback to local calculation if server fields missing
   if (game.pausedReason) return game.frozenTimeRemaining ?? game.timerSeconds;
   if (game.pendingWord) {
     if (game.timerStoppedAt && game.timerStartedAt)
@@ -931,8 +900,6 @@ function updateTimers() {
   const pct     = total > 0 ? rem / total : 0;
   const display = Math.ceil(rem);
 
-  // ── Palette-matched timer colors ──────────────────────────────────────────
-  // danger (cognac) → warning (warm gold) → mid (olive) → safe (sage)
   const color = rem <= 2 ? '#C4702A'
               : rem <= 4 ? '#C4A060'
               : rem <= 7 ? '#978F66'
